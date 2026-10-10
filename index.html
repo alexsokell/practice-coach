@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Practice Coach demo</title>
+<style>
+:root{--bg:#0e1116;--card:#171b22;--line:#2a303b;--txt:#e8ecf1;--dim:#8b95a5;--acc:#6ee7b7;--bad:#f87171;--warn:#fbbf24}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line)}
+header h1{font-size:20px;margin:0}header .st{color:var(--dim);font-size:14px}
+nav button,.btn{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:16px;cursor:pointer}
+nav button.on,.btn.pri{background:var(--acc);color:#062;border-color:var(--acc);font-weight:600}
+.btn:disabled{opacity:.4;cursor:default}
+main{padding:18px 22px;max-width:1200px;margin:auto}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:12px 0}
+.inst button{font-size:18px;padding:12px 18px}
+select,input[type=number]{background:#0b0e12;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px}
+#lane{width:100%;height:220px;background:#0b0e12;border-radius:10px;display:block}
+#score{font-size:48px;font-weight:700}
+.dim{color:var(--dim)}.bad{color:var(--bad)}.warn{color:var(--warn)}.ok{color:var(--acc)}
+#coach{font-size:19px}
+.cam{position:relative;width:480px;max-width:100%}
+.cam video,.cam canvas{width:100%;border-radius:10px;transform:scaleX(-1)}
+.cam canvas{position:absolute;left:0;top:0}
+table{border-collapse:collapse;width:100%}td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+.hidden{display:none}#live{font-size:22px;min-height:30px}
+</style></head><body>
+<header><h1>🎵 Practice Coach <span class="dim" style="font-size:14px">demo</span></h1>
+<nav class="row"><button data-tab="practice" class="on">Practice</button><button data-tab="progress">Progress</button><button data-tab="help">How to use</button></nav>
+<span class="st" id="status">No input connected</span></header>
+<main>
+<section id="tab-practice">
+ <div class="card"><div class="row inst" id="instRow"></div>
+  <div class="row" style="margin-top:12px">
+   <label>Exercise <select id="exSel"></select></label>
+   <label>BPM <input id="bpm" type="number" min="40" max="200" value="80" style="width:80px"></label>
+   <button class="btn" id="connect">Connect input</button>
+   <button class="btn pri" id="start">▶ Start</button>
+   <button class="btn" id="sim">Simulate a run</button>
+   <button class="btn" id="camBtn">📷 Form check (experimental)</button>
+  </div>
+  <p class="dim" id="inputHint"></p></div>
+ <div class="card"><canvas id="lane" width="1150" height="220"></canvas><div id="live" class="dim"></div></div>
+ <div class="row" style="align-items:flex-start">
+  <div class="card" style="flex:1;min-width:320px"><div class="dim">Last run</div><div id="score">–</div><div id="stats" class="dim"></div>
+   <p id="coach"></p><p id="next" class="ok"></p></div>
+  <div class="card hidden" id="camCard"><div class="cam"><video id="vid" autoplay playsinline muted></video><canvas id="ov"></canvas></div>
+   <p id="formMsg" class="dim">Loading hand tracking…</p>
+   <label class="dim">Sensitivity <input type="range" id="sens" min="0.5" max="1.5" step="0.05" value="1"></label></div>
+ </div>
+</section>
+<section id="tab-progress" class="hidden"><div class="card"><canvas id="chart" width="1100" height="260" style="width:100%"></canvas></div>
+ <div class="card"><table id="hist"></table><button class="btn" id="clear" style="margin-top:10px">Clear history</button></div></section>
+<section id="tab-help" class="hidden"><div class="card">
+<h3>Connecting</h3>
+<p><b>Piano / keyboard and drums / e-kit:</b> plug in by USB (or a Bluetooth MIDI adapter), press <i>Connect input</i>, allow MIDI. No keyboard? Piano works from your computer keys (A W S E D F T G Y H U J K = C4 to C5), drums from A = kick, S = snare, D = hi-hat.</p>
+<p><b>Guitar, bass, voice:</b> press <i>Connect input</i> and allow the microphone. Play one note at a time (single notes, not chords). An audio interface or a clip-on pickup works best; a laptop mic works for a quiet room. Mic instruments are graded on the note name, so the octave doesn't count against you.</p>
+<p><b>Form check:</b> turns on your webcam and tracks your hands. It flags flat fingers and a dropping wrist. It's rough and experimental.</p>
+<p><b>Simulate a run</b> fakes a slightly sloppy performance so you can see the scoring without an instrument.</p>
+<p class="dim">If MIDI or the mic won't connect when opening the file directly, open Terminal in this folder and run <code>python3 -m http.server 8000</code>, then go to <code>http://localhost:8000</code> in Chrome.</p>
+</div></section>
+</main>
+<script type="module">
+const $=s=>document.querySelector(s);
+const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const nn=m=>NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1);
+const DRUM={kick:[35,36],snare:[37,38,40],hihat:[42,44,46]};
+const drumOf=n=>Object.keys(DRUM).find(k=>DRUM[k].includes(n))||('pad'+n);
+const seq=(notes,step=1,start=0)=>notes.map((n,i)=>({t:start+i*step,n}));
+const chords=(list,step)=>list.flatMap((c,i)=>c.map(n=>({t:i*step,n})));
+const INST={
+ piano:{label:'🎹 Piano',src:'midi',ex:{
+  'C major scale, right hand':{beats:16,notes:seq([60,62,64,65,67,69,71,72,71,69,67,65,64,62,60])},
+  'I–IV–V–I in C (chords)':{beats:8,notes:chords([[60,64,67],[60,65,69],[59,62,67],[60,64,67]],2)},
+  'C major arpeggio (8ths)':{beats:5,notes:seq([60,64,67,72,67,64,60,64,67],0.5)}}},
+ drums:{label:'🥁 Drums',src:'midi',ex:{
+  'Basic rock beat (2 bars)':{beats:8,notes:[...seq(Array(16).fill('hihat'),0.5),...[0,2,4,6].map(t=>({t,n:'kick'})),...[1,3,5,7].map(t=>({t,n:'snare'}))]},
+  'Quarter-note kick + snare':{beats:8,notes:[0,1,2,3,4,5,6,7].map(t=>({t,n:t%2?'snare':'kick'}))},
+  '8th-note hi-hat control':{beats:4,notes:seq(Array(8).fill('hihat'),0.5)}}},
+ guitar:{label:'🎸 Guitar',src:'mic',ex:{
+  'E minor pentatonic up':{beats:8,notes:seq([40,43,45,47,50,52,55,57])},
+  'A minor pentatonic up & down':{beats:10,notes:seq([45,48,50,52,55,57,55,52,50,48])},
+  'Open-string tune-up (E A D G B E)':{beats:12,notes:seq([40,45,50,55,59,64],2)}}},
+ bass:{label:'🎸 Bass',src:'mic',ex:{
+  'Roots: E A D G':{beats:8,notes:seq([28,33,38,43,28,33,38,43])},
+  'Root–fifth groove in A':{beats:8,notes:seq([33,40,33,40,38,45,38,45])},
+  'E major scale':{beats:8,notes:seq([28,30,32,33,35,37,39,40])}}},
+ voice:{label:'🎤 Voice',src:'mic',ex:{
+  'Do–Re–Mi–Fa–Sol and back':{beats:18,notes:seq([60,62,64,65,67,65,64,62,60],2)},
+  'Major triad (Do–Mi–Sol–Mi–Do)':{beats:10,notes:seq([60,64,67,64,60],2)},
+  'Hold one note (A)':{beats:8,notes:[{t:0,n:57}]}}}
+};
+let inst='piano',exName=null,recording=false,events=[],t0=0,midiOK=false,micOK=false,audioCtx=null,analyser=null,buf=null;
+const keyMap={a:60,w:61,s:62,e:63,d:64,f:65,t:66,g:67,y:68,h:69,u:70,j:71,k:72};
+const drumKeys={a:'kick',s:'snare',d:'hihat'};
+function ex(){return INST[inst].ex[exName]}
+function keyOf(n){ if(inst==='drums') return typeof n==='string'?n:drumOf(n); if(INST[inst].src==='mic') return ((n%12)+12)%12; return n; }
+function label(n){ return inst==='drums'?(typeof n==='string'?n:drumOf(n)):nn(n) }
+// ---------- UI ----------
+function buildInst(){ $('#instRow').innerHTML=''; for(const k in INST){const b=document.createElement('button');b.className='btn'+(k===inst?' pri':'');b.textContent=INST[k].label;b.onclick=()=>{inst=k;buildInst();buildEx()};$('#instRow').append(b)}
+ $('#inputHint').textContent= INST[inst].src==='midi' ? 'Input: MIDI (USB or Bluetooth MIDI). Computer-key fallback works too.' : 'Input: microphone. Single notes only; graded on note name.'; }
+function buildEx(){ const s=$('#exSel'); s.innerHTML=''; Object.keys(INST[inst].ex).forEach(n=>s.add(new Option(n,n))); exName=s.value; drawLane(); }
+$('#exSel').onchange=e=>{exName=e.target.value;drawLane()};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');['practice','progress','help'].forEach(t=>$('#tab-'+t).classList.toggle('hidden',t!==b.dataset.tab));if(b.dataset.tab==='progress')drawProgress()});
+// ---------- lane ----------
+function drawLane(result,nowBeat){ const c=$('#lane'),g=c.getContext('2d'),E=ex(),W=c.width,H=c.height; g.clearRect(0,0,W,H);
+ const keys=[...new Set(E.notes.map(x=>keyOf(x.n)))].sort((a,b)=>typeof a==='string'?a.localeCompare(b):b-a);
+ const px=b=>40+b/E.beats*(W-60), py=k=>20+(keys.indexOf(k)+0.5)*(H-40)/keys.length;
+ g.strokeStyle='#2a303b'; for(let b=0;b<=E.beats;b++){g.beginPath();g.moveTo(px(b),10);g.lineTo(px(b),H-10);g.lineWidth=b%4?1:2;g.stroke()}
+ g.fillStyle='#8b95a5';g.font='13px system-ui'; keys.forEach(k=>g.fillText(typeof k==='string'?k:(INST[inst].src==='mic'?NAMES[k]:nn(k)),2,py(k)+4));
+ E.notes.forEach((x,i)=>{ let col='#3b82f6'; if(result){col=result.hit[i]?'#6ee7b7':'#f87171'} g.fillStyle=col; g.fillRect(px(x.t)-5,py(keyOf(x.n))-7,14,14) });
+ if(result){ g.fillStyle='#fbbf24'; result.extras.forEach(e=>{ if(keys.includes(keyOf(e.n))){g.beginPath();g.arc(px(e.beat),py(keyOf(e.n)),4,0,7);g.fill()} }) }
+ if(nowBeat!=null){g.strokeStyle='#fbbf24';g.lineWidth=2;g.beginPath();g.moveTo(px(nowBeat),5);g.lineTo(px(nowBeat),H-5);g.stroke()}
+ events.forEach(e=>{ if(nowBeat!=null && keys.includes(keyOf(e.n))){g.strokeStyle='#e8ecf1';g.beginPath();g.arc(px(e.beat),py(keyOf(e.n)),6,0,7);g.stroke()} }); }
+// ---------- input ----------
+$('#connect').onclick=async()=>{ if(INST[inst].src==='midi') await connectMidi(); else await connectMic(); };
+async function connectMidi(){ if(!navigator.requestMIDIAccess){status('This browser has no Web MIDI. Use Chrome, or the computer-key fallback.');return}
+ try{ const acc=await navigator.requestMIDIAccess(); const hook=()=>{let names=[];acc.inputs.forEach(i=>{i.onmidimessage=onMidi;names.push(i.name)}); midiOK=names.length>0; status(midiOK?'MIDI: '+names.join(', '):'MIDI allowed, but no device found. Plug it in, or use computer keys.')}; hook(); acc.onstatechange=hook; }catch(e){status('MIDI permission denied.')} }
+function onMidi(m){ const [s,n,v]=m.data; if((s&0xf0)===0x90&&v>0) note(n,v); }
+function note(n,v=90,time=performance.now()){ $('#live').textContent='Heard: '+label(n)+(INST[inst].src==='midi'?'  (velocity '+v+')':''); if(!recording) return; const ms=time-t0; events.push({n,v,ms,beat:ms/beatMs()}); }
+window.addEventListener('keydown',e=>{ if(e.repeat||e.target.tagName==='INPUT')return; const k=e.key.toLowerCase(); if(inst==='piano'&&keyMap[k]) note(keyMap[k]); if(inst==='drums'&&drumKeys[k]) note(DRUM[drumKeys[k]][drumKeys[k]==='hihat'?0:1]); });
+async function ensureAudio(){ if(!audioCtx) audioCtx=new AudioContext(); if(audioCtx.state==='suspended') await audioCtx.resume(); }
+async function connectMic(){ await ensureAudio(); try{ const st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}}); const src=audioCtx.createMediaStreamSource(st); analyser=audioCtx.createAnalyser(); analyser.fftSize=4096; buf=new Float32Array(analyser.fftSize); src.connect(analyser); micOK=true; status('Microphone connected'); micLoop(); }catch(e){status('Microphone permission denied.')} }
+function detectPitch(){ analyser.getFloatTimeDomainData(buf); const N=buf.length; let rms=0; for(let i=0;i<N;i++) rms+=buf[i]*buf[i]; rms=Math.sqrt(rms/N); if(rms<0.012) return {rms,f:0};
+ const sr=audioCtx.sampleRate, minLag=Math.floor(sr/1100), maxLag=Math.floor(sr/38); let best=-1,bestLag=0; const c=new Float32Array(maxLag+2);
+ for(let lag=minLag;lag<=maxLag;lag++){ let s=0; for(let i=0;i<N-lag;i++) s+=buf[i]*buf[i+lag]; c[lag]=s; if(s>best){best=s;bestLag=lag} }
+ // prefer the shortest lag close to the max (avoid octave errors)
+ for(let lag=minLag;lag<bestLag;lag++){ if(c[lag]>0.9*best && c[lag]>=c[lag-1] && c[lag]>=c[lag+1]){bestLag=lag;break} }
+ const a=c[bestLag-1]||0,b=c[bestLag],d=c[bestLag+1]||0, sh=(a-d)/(2*(a-2*b+d)||1); return {rms,f:sr/(bestLag+(isFinite(sh)?sh:0))}; }
+let stable=null,stableCount=0,lastEmitted=null,lastRms=0,silence=true;
+function micLoop(){ const {rms,f}=detectPitch(); const now=performance.now();
+ if(f>0){ const m=Math.round(69+12*Math.log2(f/440)); if(m===stable) stableCount++; else {stable=m;stableCount=1}
+  const attack=rms>lastRms*1.8 && rms>0.03;
+  if(stableCount===3 && (m!==lastEmitted||silence)){ note(m,0,now-50); lastEmitted=m; silence=false }
+  else if(attack && stableCount>=3 && !silence && m===lastEmitted && inst!=='voice'){ note(m,0,now-20) }
+ } else { stableCount=0; stable=null; if(rms<0.008) silence=true; }
+ lastRms=rms; requestAnimationFrame(micLoop); }
+function status(t){$('#status').textContent=t}
+// ---------- metronome + run ----------
+const beatMs=()=>60000/(+$('#bpm').value||80);
+function click(at,accent){ const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.frequency.value=accent?1500:1000; g.gain.setValueAtTime(0.25,at); g.gain.exponentialRampToValueAtTime(0.001,at+0.05); o.connect(g).connect(audioCtx.destination); o.start(at); o.stop(at+0.06); }
+$('#start').onclick=async()=>{ if(recording) return; await ensureAudio(); const E=ex(), bm=beatMs(), count=4; events=[]; drawLane();
+ const aStart=audioCtx.currentTime+0.1; for(let i=0;i<count+E.beats;i++) click(aStart+i*bm/1000, i%4===0);
+ t0=performance.now()+100+count*bm; recording=true; $('#start').disabled=true; $('#live').textContent='Count-in… 1 2 3 4';
+ const tick=()=>{ const b=(performance.now()-t0)/bm; drawLane(null,Math.max(0,b)); if(b<E.beats+0.75) requestAnimationFrame(tick); else finish(); }; tick(); };
+function finish(){ recording=false; $('#start').disabled=false; const r=grade(ex(),events,beatMs()); report(r); }
+$('#sim').onclick=()=>{ const E=ex(), bm=beatMs(); events=[]; const drift=-15-Math.random()*20;
+ E.notes.forEach((x,i)=>{ if(Math.random()<0.08) return; let n=x.n; if(typeof n==='string') n=DRUM[n][n==='hihat'?0:1]; if(Math.random()<0.06 && typeof x.n==='number') n=x.n+1;
+  const late=(x.t>E.beats/2? 35:0)+drift+ (Math.random()-0.5)*40; const ms=x.t*bm+late; events.push({n,v:Math.round(70+Math.random()*45),ms,beat:ms/bm}) });
+ report(grade(E,events,bm)); };
+// ---------- grading ----------
+function grade(E,evs,bm){ const win=Math.min(0.3*bm,200); const used=new Set(), hit=[], offs=[];
+ E.notes.forEach((x,i)=>{ const k=keyOf(x.n), tm=x.t*bm; let bi=-1,bd=1e9; evs.forEach((e,j)=>{ if(used.has(j)||keyOf(e.n)!==k) return; const d=e.ms-tm; if(Math.abs(d)<win&&Math.abs(d)<Math.abs(bd)){bd=d;bi=j} });
+  if(bi>=0){used.add(bi);hit[i]=true;offs.push({t:x.t,d:bd,v:evs[bi].v})} else hit[i]=false; });
+ const extras=evs.filter((e,j)=>!used.has(j)&&e.beat>-0.5&&e.beat<E.beats+0.5);
+ const nHit=hit.filter(Boolean).length, total=E.notes.length, mean=offs.length?offs.reduce((s,o)=>s+o.d,0)/offs.length:0, mad=offs.length?offs.reduce((s,o)=>s+Math.abs(o.d),0)/offs.length:0;
+ const vels=offs.map(o=>o.v).filter(v=>v>0), vm=vels.reduce((a,b)=>a+b,0)/(vels.length||1), vsd=vels.length>1?Math.sqrt(vels.reduce((s,v)=>s+(v-vm)**2,0)/vels.length):0;
+ // worst bar by timing
+ const bars={}; offs.forEach(o=>{const b=Math.floor(o.t/4)+1;(bars[b]=bars[b]||[]).push(o.d)}); let worst=null; for(const b in bars){const m=bars[b].reduce((a,c)=>a+c,0)/bars[b].length; if(!worst||Math.abs(m)>Math.abs(worst.m)) worst={b,m}}
+ const wrongNotes=extras.slice(0,4).map(e=>label(e.n)+' at beat '+(e.beat+1).toFixed(1));
+ const missed=E.notes.filter((x,i)=>!hit[i]).slice(0,4).map(x=>label(x.n)+' on beat '+(x.t+1));
+ let score=100*nHit/total - Math.min(25,mad/win*25) - Math.min(20,extras.length*3) - (vsd>18?5:0); score=Math.max(0,Math.round(score));
+ return {hit,extras,nHit,total,mean,mad,vsd,worst,wrongNotes,missed,score}; }
+function coach(r){ const bpm=+$('#bpm').value, tips=[]; const pct=r.nHit/r.total;
+ if(r.total===0) return ['',''];
+ if(pct<0.6) tips.push(`You caught ${r.nHit} of ${r.total} notes. That's a sign the tempo is too fast for now, not that you can't play it.`);
+ if(r.missed.length) tips.push('Missed: '+r.missed.join(', ')+'.');
+ if(r.wrongNotes.length) tips.push('Extra or wrong notes: '+r.wrongNotes.join(', ')+'.');
+ if(Math.abs(r.mean)>20) tips.push(`On average you're ${Math.abs(Math.round(r.mean))} ms ${r.mean<0?'early (rushing)':'late (dragging)'}. ${r.mean<0?'Try to sit back and let the click come to you.':'Try to anticipate the click slightly.'}`);
+ if(r.worst&&Math.abs(r.worst.m)>30) tips.push(`Bar ${r.worst.b} is the shakiest, about ${Math.abs(Math.round(r.worst.m))} ms ${r.worst.m<0?'ahead':'behind'}. Loop just that bar.`);
+ if(r.vsd>18) tips.push(`Your dynamics jump around (velocity spread ${Math.round(r.vsd)}). Aim for every note at the same volume.`);
+ if(!tips.length) tips.push('Clean run. Notes and timing were solid.');
+ let next; if(r.score>=90) next=`Next: bump it to ${bpm+8} BPM, or move to the next exercise.`; else if(r.score>=70) next=`Next: run it again at ${bpm} BPM and aim for 90+.`; else next=`Next: drop to ${Math.max(40,Math.round(bpm*0.85))} BPM${inst==='piano'?' and try hands separately':''}, then build back up.`;
+ return [tips.join(' '),next]; }
+function report(r){ drawLane(r); $('#score').textContent=r.score+'/100'; $('#score').className=r.score>=90?'ok':r.score>=70?'warn':'bad';
+ $('#stats').textContent=`${r.nHit}/${r.total} notes · avg timing ${r.mean>=0?'+':''}${Math.round(r.mean)} ms · avg error ${Math.round(r.mad)} ms`+(INST[inst].src==='midi'&&r.vsd?` · velocity spread ${Math.round(r.vsd)}`:'');
+ const [c,n]=coach(r); $('#coach').textContent=c; $('#next').textContent=n;
+ const h=JSON.parse(localStorage.getItem('pc-hist')||'[]'); h.push({d:Date.now(),inst,ex:exName,bpm:+$('#bpm').value,score:r.score}); localStorage.setItem('pc-hist',JSON.stringify(h)); }
+// ---------- progress ----------
+function drawProgress(){ const h=JSON.parse(localStorage.getItem('pc-hist')||'[]'); const t=$('#hist');
+ t.innerHTML='<tr><th>When</th><th>Instrument</th><th>Exercise</th><th>BPM</th><th>Score</th></tr>'+h.slice(-30).reverse().map(x=>`<tr><td>${new Date(x.d).toLocaleString()}</td><td>${INST[x.inst]?.label||x.inst}</td><td>${x.ex}</td><td>${x.bpm}</td><td>${x.score}</td></tr>`).join('');
+ const c=$('#chart'),g=c.getContext('2d'); g.clearRect(0,0,c.width,c.height); g.fillStyle='#8b95a5'; g.font='14px system-ui';
+ const cur=h.filter(x=>x.inst===inst&&x.ex===exName); g.fillText(`Scores over time: ${INST[inst].label} · ${exName} (${cur.length} runs)`,10,20); if(cur.length<1) return;
+ g.strokeStyle='#6ee7b7'; g.lineWidth=3; g.beginPath(); cur.forEach((x,i)=>{const X=30+i*(c.width-60)/Math.max(1,cur.length-1),Y=c.height-20-x.score/100*(c.height-50); i?g.lineTo(X,Y):g.moveTo(X,Y)}); g.stroke(); }
+$('#clear').onclick=()=>{localStorage.removeItem('pc-hist');drawProgress()};
+// ---------- camera form check ----------
+let hand=null;
+$('#camBtn').onclick=async()=>{ $('#camCard').classList.toggle('hidden'); if(hand||$('#camCard').classList.contains('hidden')) return;
+ try{ const vision=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
+  const fs=await vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  hand=await vision.HandLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:2});
+  const v=$('#vid'); v.srcObject=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480}}); await v.play(); camLoop();
+ }catch(e){ $('#formMsg').textContent='Could not start hand tracking: '+e.message } };
+const ang=(a,b,c)=>{const v1=[a.x-b.x,a.y-b.y],v2=[c.x-b.x,c.y-b.y];return Math.acos((v1[0]*v2[0]+v1[1]*v2[1])/(Math.hypot(...v1)*Math.hypot(...v2)))*180/Math.PI};
+let flatFrames=0,wristFrames=0;
+function camLoop(){ const v=$('#vid'),c=$('#ov'); c.width=v.videoWidth; c.height=v.videoHeight; const g=c.getContext('2d'); const res=hand.detectForVideo(v,performance.now()); g.clearRect(0,0,c.width,c.height);
+ const s=+$('#sens').value, msgs=[];
+ (res.landmarks||[]).forEach(L=>{ g.fillStyle='#6ee7b7'; L.forEach(p=>{g.beginPath();g.arc(p.x*c.width,p.y*c.height,4,0,7);g.fill()});
+  const pip=[[5,6,7],[9,10,11],[13,14,15]].map(([a,b,d])=>ang(L[a],L[b],L[d])); const flat=pip.filter(x=>x>(172-8*(s-1)*5)).length>=2;
+  const mcpY=(L[5].y+L[9].y+L[13].y+L[17].y)/4, handLen=Math.hypot(L[0].x-L[9].x,L[0].y-L[9].y), drop=(L[0].y-mcpY)/handLen;
+  flatFrames=flat?flatFrames+1:0; wristFrames=(drop>0.9/s && (inst==='piano'))?wristFrames+1:0;
+  if(flatFrames>20) msgs.push('Fingers look flat. Curve them like you are holding a ball.');
+  if(wristFrames>20) msgs.push('Wrist is dropping below your knuckles. Lift it level.'); });
+ $('#formMsg').textContent=(res.landmarks||[]).length?(msgs.length?msgs.join(' '):'Form looks okay.'):'No hands in view. Point the camera at your hands.';
+ $('#formMsg').className=msgs.length?'warn':'dim'; requestAnimationFrame(camLoop); }
+buildInst(); buildEx();
+</script></body></html>
