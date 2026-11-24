@@ -125,12 +125,13 @@ function loadExercise(next, { parent = null } = {}) {
   els.goal.textContent = next.goal;
   els.parent.hidden = !parent;
   els.result.hidden = true;
+  // Show the exercise view first: the notation needs a visible container to size itself.
+  if (view !== 'exercise') showView('exercise');
   drawStaff();
   const notes = next.steps.flatMap((step) => step.notes);
   if (notes.length) keyboard.fitTo(notes);
   updateControls();
   newAttempt();
-  if (view !== 'exercise') setView('exercise');
   return true;
 }
 
@@ -571,7 +572,8 @@ function stopDemo() {
 
 // ------------------------------------------------------------------ free play
 
-function setView(next) {
+/** Switch the visible panel and tab highlight only. */
+function showView(next) {
   view = next;
   const free = next === 'freeplay';
   $('view-exercise').hidden = free;
@@ -580,6 +582,12 @@ function setView(next) {
   $('tab-freeplay').classList.toggle('is-active', free);
   $('tab-exercise').setAttribute('aria-selected', String(!free));
   $('tab-freeplay').setAttribute('aria-selected', String(free));
+}
+
+function setView(next) {
+  if (next === view) return;
+  showView(next);
+  const free = next === 'freeplay';
   stopDemo();
   if (free) {
     cancelAnimationFrame(rafId);
