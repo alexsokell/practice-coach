@@ -181,6 +181,12 @@ from packet to coach reply is exercised without hardware.
 - **Timing over Bluetooth is good, not perfect.** The app uses the piano's own timestamps to remove most Bluetooth
   jitter, but a constant delay of some tens of milliseconds cannot be told apart from playing late. Trust the
   spread and the drift more than the average. Settings has a timing offset if it always reads late.
+- **Metronome mode does not re-sync.** Each note has a fixed window around its click. If you fall a whole beat
+  behind, the notes after that are marked as missed or off the beat until the try ends.
+- **Chords must be down together.** In learn-the-notes mode a chord counts when all its keys are held at the
+  same moment, and a key shared with the previous chord has to be struck again.
+- **The offline coach is a few simple rules,** there so you can try the app without a key. It cannot answer
+  questions and its feedback is generic.
 - **Fingerings cover the standard cases only:** major and minor scales, the chromatic scale, major and minor triad
   arpeggios, five-finger patterns and block chords. Anything else is shown without finger numbers rather than
   guessed. The tables were checked against several piano-teaching sites through search results, not against a
