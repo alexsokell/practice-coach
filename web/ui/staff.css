@@ -1,0 +1,49 @@
+/* Notation colors. The variables come from styles.css; the fallbacks keep the
+   staff readable if it is ever used on its own. */
+
+svg.staff {
+  display: block;
+  color: var(--ink, #1c2333);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.staff-lines line {
+  stroke: var(--muted, #888);
+  stroke-width: 1;
+  opacity: 0.75;
+}
+.staff-lines .staff-bar-thick { stroke-width: 3; }
+.staff-clef path { stroke: var(--muted, #888); }
+.staff-clef .staff-fill { fill: var(--muted, #888); stroke: none; }
+.staff-brace { fill: none; stroke: var(--muted, #888); stroke-width: 2; stroke-linecap: round; }
+
+/* One step = one <g class="staff-step st-..."> */
+.staff-step { --tone: var(--ink, currentColor); }
+.staff-step.st-ok { --tone: var(--ok, #2f855a); }
+.staff-step.st-error { --tone: var(--err, #c53030); }
+.staff-step.st-missed { --tone: var(--muted, #888); }
+.staff-step.is-current { --tone: var(--accent, #2b6cb0); }
+
+.staff-step .staff-fill { fill: var(--tone); }
+.staff-step .staff-head { stroke: var(--tone); stroke-width: 1.3; }
+.staff-step .staff-head-open { fill: none; stroke-width: 1.9; }
+.staff-step .staff-stem { stroke: var(--tone); stroke-width: 1.3; stroke-linecap: round; }
+.staff-step .staff-flag { fill: none; stroke: var(--tone); stroke-width: 1.7; stroke-linecap: round; }
+.staff-step .staff-ledger { stroke: var(--tone); stroke-width: 1.2; opacity: 0.8; }
+.staff-step .staff-acc line,
+.staff-step .staff-acc path { stroke: var(--tone); }
+.staff-step .staff-rest path { stroke: var(--tone); }
+
+.staff-step .staff-name { font-size: 11px; font-weight: 600; fill: var(--muted, #888); }
+.staff-step .staff-finger { font-size: 11px; font-weight: 800; fill: var(--hand-r, var(--accent, #2b6cb0)); }
+.staff-step .staff-finger-l { fill: var(--hand-l, #8a4fd6); }
+.staff-step .staff-label { font-size: 12px; font-weight: 800; fill: var(--ink, currentColor); }
+.staff-step.st-ok .staff-name,
+.staff-step.st-error .staff-name,
+.staff-step.is-current .staff-name { fill: var(--tone); }
+
+.staff-step.st-missed .staff-head { stroke-dasharray: 2.5 2; fill: none; }
+.staff-step.st-missed { opacity: 0.75; }
+
+.staff-step .staff-hl { fill: var(--accent, #2b6cb0); opacity: 0; }
+.staff-step.is-current .staff-hl { opacity: 0.11; }
