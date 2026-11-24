@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Practice Coach</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ui/staff.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4v9M12 4v9M16 4v9" stroke="currentColor" stroke-width="2.6"/><path d="M6 20v-6M10 20v-6M14 20v-6M18 20v-6" stroke="currentColor" stroke-width="1"/></svg>
+      <span>Practice Coach</span>
+    </div>
+    <div class="topbar-right">
+      <span id="conn-pill" class="pill pill-off" role="status">No piano connected</span>
+      <button id="btn-connect" class="btn btn-primary" type="button">Connect piano</button>
+      <button id="btn-settings" class="btn btn-icon" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.6"/><circle cx="8" cy="17" r="2.6"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage" aria-label="Practice">
+      <div class="tabs" role="tablist">
+        <button id="tab-exercise" class="tab is-active" role="tab" aria-selected="true" type="button">Exercise</button>
+        <button id="tab-freeplay" class="tab" role="tab" aria-selected="false" type="button">Free play</button>
+        <span class="tabs-spacer"></span>
+        <button id="btn-library" class="btn btn-ghost btn-small" type="button">All exercises</button>
+      </div>
+
+      <div id="view-exercise" class="card exercise">
+        <div class="ex-head">
+          <div class="ex-text">
+            <h1 id="ex-title">Loading</h1>
+            <p id="ex-goal" class="muted"></p>
+          </div>
+          <button id="btn-parent" class="btn btn-ghost btn-small" type="button" hidden>Back to full exercise</button>
+        </div>
+
+        <div id="pending-banner" class="banner" hidden>
+          <span id="pending-text"></span>
+          <button id="btn-pending" class="btn btn-small" type="button">Switch now</button>
+        </div>
+
+        <div id="staff" class="staff-wrap"></div>
+
+        <div class="ex-status">
+          <div id="ex-progress" class="progress" aria-hidden="true"><div id="ex-progress-bar"></div></div>
+          <p id="ex-status" class="status-line" role="status"></p>
+          <div id="ex-result" class="chips" hidden></div>
+        </div>
+
+        <div class="ex-controls">
+          <div class="seg" role="group" aria-label="Practice mode">
+            <button id="mode-wait" class="seg-btn is-active" type="button" title="The app waits until you play the right note">Learn the notes</button>
+            <button id="mode-tempo" class="seg-btn" type="button" title="Play in time with a metronome">With metronome</button>
+          </div>
+          <div class="stepper" role="group" aria-label="Tempo">
+            <button id="bpm-down" class="btn btn-icon" type="button" aria-label="Slower">&minus;</button>
+            <span class="stepper-value"><strong id="bpm-value">60</strong> bpm</span>
+            <button id="bpm-up" class="btn btn-icon" type="button" aria-label="Faster">+</button>
+          </div>
+          <span class="tabs-spacer"></span>
+          <button id="btn-demo" class="btn" type="button">Listen</button>
+          <button id="btn-hint" class="btn" type="button">Hint</button>
+          <button id="btn-start" class="btn btn-primary" type="button">Restart</button>
+          <button id="btn-next" class="btn" type="button">Next exercise</button>
+        </div>
+      </div>
+
+      <div id="view-freeplay" class="card freeplay" hidden>
+        <div class="fp-grid">
+          <div class="fp-big">
+            <span class="fp-label">Chord</span>
+            <strong id="fp-chord">&middot;</strong>
+          </div>
+          <div class="fp-big">
+            <span class="fp-label">Key</span>
+            <strong id="fp-key">&middot;</strong>
+          </div>
+          <div class="fp-big">
+            <span class="fp-label">Tempo</span>
+            <strong id="fp-tempo">&middot;</strong>
+          </div>
+          <div class="fp-big">
+            <span class="fp-label">Evenness</span>
+            <strong id="fp-even">&middot;</strong>
+          </div>
+        </div>
+        <p id="fp-status" class="status-line">Play anything. Pause for two seconds and your coach will tell you what it heard.</p>
+        <label class="check"><input id="fp-listen" type="checkbox"> Coach comments on what I play</label>
+      </div>
+
+      <div class="card keys">
+        <div class="keys-head">
+          <div id="live" class="live" aria-live="off">
+            <span id="live-notes" class="live-notes">Waiting for notes</span>
+            <span id="live-pedal" class="pill pill-off" hidden>Pedal</span>
+          </div>
+          <div class="keys-tools">
+            <button id="kb-left" class="btn btn-icon" type="button" aria-label="Show lower keys">&lsaquo;</button>
+            <button id="kb-right" class="btn btn-icon" type="button" aria-label="Show higher keys">&rsaquo;</button>
+          </div>
+        </div>
+        <div id="keyboard"></div>
+        <p class="hint-line muted">No piano nearby? Click the keys, or use the computer keyboard: A S D F G H J K for white keys, W E T Y U for black keys, Z and X to change octave.</p>
+      </div>
+    </section>
+
+    <aside class="coach card" aria-label="Coach">
+      <div class="coach-head">
+        <div>
+          <h2>Coach</h2>
+          <span id="coach-mode" class="muted small"></span>
+        </div>
+        <label class="check" title="Read the coach's replies aloud"><input id="coach-voice" type="checkbox"> Voice</label>
+      </div>
+      <div id="coach-log" class="coach-log" aria-live="polite"></div>
+      <div class="quick">
+        <button class="btn btn-small" type="button" data-quick="How did that last try go? What should I fix first?">How did I do?</button>
+        <button class="btn btn-small" type="button" data-quick="Explain what this exercise is for and how to practice it.">Why this exercise?</button>
+        <button class="btn btn-small" type="button" data-quick="This is too hard right now. Give me something easier.">Easier</button>
+        <button class="btn btn-small" type="button" data-quick="This is easy for me. Give me something harder.">Harder</button>
+      </div>
+      <form id="coach-form" class="coach-form" autocomplete="off">
+        <input id="coach-input" type="text" placeholder="Ask your coach anything" aria-label="Message to your coach" maxlength="1000">
+        <button class="btn btn-primary" type="submit">Send</button>
+      </form>
+    </aside>
+  </main>
+
+  <dialog id="dlg-connect" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Connect your piano</h2>
+      <p id="connect-hint" class="muted"></p>
+      <div class="choice-list">
+        <button id="connect-ble" class="choice" type="button">
+          <strong>Bluetooth piano</strong>
+          <span>Turn on Bluetooth MIDI on the piano, then pick it from the list.</span>
+        </button>
+        <button id="connect-ble-all" class="choice choice-quiet" type="button">
+          <strong>My piano is not in the list</strong>
+          <span>Show every nearby Bluetooth device and try again.</span>
+        </button>
+        <button id="connect-midi" class="choice" type="button">
+          <strong>USB cable or already paired</strong>
+          <span>Uses any MIDI device your computer already sees.</span>
+        </button>
+        <button id="connect-none" class="choice choice-quiet" type="button">
+          <strong>No piano right now</strong>
+          <span>Use the on-screen keys or your computer keyboard.</span>
+        </button>
+      </div>
+      <p id="connect-error" class="error-text" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="connect-disconnect" class="btn" type="button" hidden>Disconnect</button>
+        <button class="btn" value="cancel">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-setup" class="dialog">
+    <form id="setup-form" method="dialog" class="dialog-body">
+      <h2>Tell your coach about you</h2>
+      <p class="muted">This stays in this browser. It is sent to the coach so the lessons fit you.</p>
+      <label class="field">What should the coach call you? (optional)
+        <input id="setup-name" type="text" maxlength="40" autocomplete="off">
+      </label>
+      <label class="field">Where are you with piano?
+        <select id="setup-level">
+          <option value="new">Brand new, never played</option>
+          <option value="beginner" selected>Beginner, I know a few notes</option>
+          <option value="returning">Coming back after years away</option>
+          <option value="intermediate">Intermediate, I play pieces with both hands</option>
+        </select>
+      </label>
+      <label class="field">What do you want to be able to do?
+        <textarea id="setup-goals" rows="2" maxlength="300" placeholder="Example: play simple songs with both hands, read sheet music"></textarea>
+      </label>
+      <label class="field">Anything else the coach should know? (optional)
+        <textarea id="setup-about" rows="2" maxlength="300" placeholder="Example: 15 minutes a day, be blunt with me, small 61-key keyboard"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button id="setup-cancel" class="btn" type="button" hidden>Cancel</button>
+        <button class="btn btn-primary" type="submit">Start practicing</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Settings</h2>
+      <div class="settings-grid">
+        <label class="check"><input id="set-keyhints" type="checkbox"> Light up the next key on the keyboard</label>
+        <label class="check"><input id="set-names" type="checkbox"> Show note names under the notes</label>
+        <label class="check"><input id="set-fingers" type="checkbox"> Show finger numbers</label>
+        <label class="check"><input id="set-anyoctave" type="checkbox"> Accept the right note in any octave (small keyboards)</label>
+        <label class="check"><input id="set-demopiano" type="checkbox"> Play the Listen demo on my piano when it supports it</label>
+        <label class="field">Sound volume
+          <input id="set-volume" type="range" min="0" max="1" step="0.05">
+        </label>
+        <label class="field">Timing offset in milliseconds (raise it if the metronome mode always says you are late)
+          <input id="set-latency" type="number" min="-200" max="300" step="5">
+        </label>
+      </div>
+      <h3>Coach</h3>
+      <p id="set-usage" class="muted small"></p>
+      <p id="set-notes" class="notes-box small"></p>
+      <div class="dialog-actions wrap">
+        <button id="set-profile" class="btn" type="button">Edit my profile</button>
+        <button id="set-newsession" class="btn" type="button">Start a fresh session</button>
+        <button id="set-reset" class="btn btn-danger" type="button">Erase all my data</button>
+        <span class="tabs-spacer"></span>
+        <button class="btn btn-primary" value="close">Done</button>
+      </div>
+      <details class="debug">
+        <summary>MIDI monitor</summary>
+        <pre id="midi-log" class="midi-log" aria-label="Recent MIDI messages"></pre>
+      </details>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-library" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>All exercises</h2>
+      <p class="muted">Pick one yourself, or let the coach choose with Next exercise.</p>
+      <div id="library-list" class="choice-list"></div>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="countin" class="countin" hidden aria-hidden="true"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
