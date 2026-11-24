@@ -11,7 +11,7 @@ import { loadState, saveState, saveStateNow, clearState, todayKey } from './stor
 import { buildExercise, validateExercise, withTempo, describeExercise, STARTER_EXERCISES } from '../shared/exercises.js';
 import { AttemptTracker, FreePlayAnalyzer } from '../shared/tracker.js';
 import * as summary from '../shared/summary.js';
-import { detectChord } from '../shared/theory.js';
+import { detectChord, spellMidi } from '../shared/theory.js';
 import { midiToName } from '../shared/midi.js';
 
 const $ = (id) => document.getElementById(id);
@@ -67,6 +67,27 @@ let lastFreePlayCoachAt = 0;
 let lastNoteAt = 0;
 let lastNote = null;
 let lastResult = null; // the most recent finished AttemptResult
+let finishedCount = 0; // tries finished since the page loaded
+let finishStrike = null; // { time, velocity } of the note that completed the last try (for seamless looping)
+let exerciseNames = new Map(); // MIDI number -> the name this exercise spells it with
+let freePlayKey = null; // last confident key guess in free play, for note spelling
+
+const REARM_MS = 1500; // quiet time after a finished try before the next one is armed
+const MIN_REPORT_GAP_MS = 8000; // tries are reported to the coach no more often than this
+const LEVEL_LABELS = {
+  new: 'brand new, never played',
+  beginner: 'beginner, knows a few notes',
+  returning: 'coming back after years away',
+  intermediate: 'intermediate, plays pieces with both hands',
+};
+let lastKeyAt = 0; // performance.now() of the newest key press
+let lastReportAt = 0; // Date.now() of the last try report sent to the coach
+let heldReport = null; // newest try report, waiting for the gap to pass
+let heldTimer = 0;
+let sinceReport = { tries: 0, clean: 0 }; // tries finished since the last report went out
+let suggestion = null; // exercise the coach offered while the learner was in free play
+let connectionNotice = false; // the status line is showing a connection message
+const LOOP_JOIN_MS = 2500; // how soon after the last note a second round may run straight on
 let virtualOctave = 0;
 let health = null;
 const previousResults = new Map(); // exercise id -> last AttemptResult
@@ -86,7 +107,7 @@ const coach = new CoachSession({
   getSession: () => state.session,
   getExercise: () => exercise,
   buildPreamble: () => sessionStartText(),
-  onAction: (action) => applyCoachAction(action),
+  onAction: (action, event) => applyCoachAction(action, event),
   onNotes: (text) => {
     state.notes = text.slice(0, 1200);
     saveState(state);
@@ -117,6 +138,14 @@ function loadExercise(next, { parent = null, keepResult = false } = {}) {
   stopDemo();
   exercise = next;
   pendingSwitch = null;
+  finishStrike = null;
+  clearTimeout(heldTimer);
+  heldReport = null;
+  sinceReport = { tries: 0, clean: 0 };
+  exerciseNames = new Map();
+  for (const step of next.steps) step.notes.forEach((midi, i) => exerciseNames.has(midi) || exerciseNames.set(midi, step.names[i]));
+  // Reports and hints still waiting in the queue are about an exercise that is no longer on screen.
+  coach.discardQueued((event) => (event.kind === 'attempt' || event.kind === 'hint') && event.exercise?.id !== next.id);
   els.banner.hidden = true;
   state.session.exercise = next;
   state.session.parent = parent;
@@ -180,6 +209,9 @@ function newAttempt({ keepResult = false } = {}) {
   attempt.wrongOnStep = 0;
   attempt.hintedStep = -1;
   attempt.lastActivity = 0;
+  attempt.lastWrong = null;
+  attempt.virtualNotes = 0;
+  attempt.pianoNotes = 0;
   if (!keepResult) els.result.hidden = true;
   keyboard.releaseAll();
   for (const midi of input.held.keys()) keyboard.setDown(midi, true);
@@ -247,6 +279,7 @@ function onNote(note) {
   if (on) {
     trackPracticeTime();
     lastNote = note;
+    lastKeyAt = performance.now();
   }
   updateLive();
 
@@ -269,12 +302,21 @@ function onNote(note) {
   if (demo) stopDemo();
 
   if (attempt.status === 'finished') {
-    // Right after an attempt ends, only a note that starts the exercise again counts.
-    const first = exercise.steps.find((step) => step.notes.length);
-    if (exercise.mode === 'wait' && first?.notes.includes(note.midi)) {
+    // Right after a try ends, only a note that starts the exercise again counts.
+    const playable = exercise.steps.filter((step) => step.notes.length);
+    const inStep = (step) => Boolean(step) && step.notes.some((midi) => sameKey(midi, note.midi));
+    if (exercise.mode === 'wait' && inStep(playable[0])) {
       newAttempt();
+    } else if (exercise.mode === 'wait' && canLoopOn(playable, note) && inStep(playable[1])) {
+      // Looping without a break: the last note of the round just played is also the first of this one.
+      newAttempt();
+      for (const midi of playable[0].notes) tracker.noteOn(midi, finishStrike.velocity, finishStrike.time);
+      for (const midi of playable[0].notes) if (!input.held.has(midi)) tracker.noteOff(midi, finishStrike.time);
+      attempt.status = 'playing';
     } else {
       keyboard.setDown(note.midi, true);
+      // Still playing something: do not arm a new try in the middle of it.
+      scheduleAfterAttempt();
       return;
     }
   }
@@ -305,18 +347,130 @@ function onNote(note) {
   if (judged.stepCompleted || tracker.stepIndex !== stepBefore) attempt.wrongOnStep = 0;
   refreshProgress();
 
+  if (note.source === 'virtual') attempt.virtualNotes += 1;
+  else attempt.pianoNotes += 1;
+
   if (judged.kind === 'wrong' && exercise.mode === 'wait') {
     attempt.wrongOnStep += 1;
+    if (restartedFromTop(note)) return;
     const targets = pendingTargets();
-    setStatus(`That was ${midiToName(note.midi)}. You need ${describeTargets(targets)}.`, 'bad');
+    const opening = exercise.steps.find((step) => step.notes.length);
+    const startingOver = tracker.stepIndex >= 2 && opening?.notes.some((midi) => sameKey(midi, note.midi));
+    setStatus(
+      `That was ${nameOf(note.midi)}. You need ${describeTargets(targets)}.${startingOver ? ' Starting over? Just keep playing from the top.' : ''}`,
+      'bad',
+    );
     maybeAutoHint();
   }
-  if (judged.finished || tracker.finished) finishAttempt();
+  if (judged.finished || tracker.finished) {
+    finishStrike = { time: note.time, velocity: note.velocity };
+    finishAttempt();
+  }
+}
+
+/** Same key, or the same note in any octave when that setting is on. */
+function sameKey(a, b) {
+  return state.settings.anyOctave ? (a - b) % 12 === 0 : a === b;
+}
+
+/**
+ * A slip, then the first two notes of the exercise again: the learner started over, which is what
+ * most beginners do. Begin a fresh try from those two notes instead of scoring them as wrong.
+ */
+function restartedFromTop(note) {
+  const previous = attempt.lastWrong;
+  attempt.lastWrong = { midi: note.midi, velocity: note.velocity, time: note.time, step: tracker.stepIndex };
+  const playable = exercise.steps.filter((step) => step.notes.length);
+  if (playable.length < 4 || playable.indexOf(currentStep()) < 2) return false;
+  if (playable[0].notes.length !== 1 || playable[1].notes.length !== 1) return false;
+  if (!previous || previous.step !== tracker.stepIndex || note.time - previous.time > 3000) return false;
+  if (!sameKey(playable[0].notes[0], previous.midi) || !sameKey(playable[1].notes[0], note.midi)) return false;
+  newAttempt();
+  tracker.noteOn(previous.midi, previous.velocity, previous.time);
+  if (!input.held.has(previous.midi)) tracker.noteOff(previous.midi, previous.time);
+  tracker.noteOn(note.midi, note.velocity, note.time);
+  attempt.status = 'playing';
+  attempt.lastActivity = performance.now();
+  keyboard.setDown(note.midi, true, 'ok');
+  refreshProgress();
+  setStatus('Starting again from the first note.');
+  return true;
+}
+
+/** True when the exercise ends on the notes it starts with and the learner is carrying straight on. */
+function canLoopOn(playable, note) {
+  if (!finishStrike || pendingSwitch || playable.length < 3) return false;
+  const first = playable[0].notes;
+  const last = playable[playable.length - 1].notes;
+  if (first.length !== last.length || first.some((midi, i) => midi !== last[i])) return false;
+  return note.time - finishStrike.time < LOOP_JOIN_MS;
+}
+
+/** The name the current exercise uses for a key (Bb, not A#, in F major). */
+function nameOf(midi) {
+  if (view === 'freeplay') return spellMidi(midi, freePlayKey);
+  return exerciseNames.get(midi) ?? spellMidi(midi, exercise?.key ?? null);
+}
+
+/** After a finished try: load what the coach queued up, or arm the next try once the learner pauses. */
+function scheduleAfterAttempt() {
+  clearTimeout(finishTimer);
+  finishTimer = setTimeout(() => {
+    // A switch the coach has queued up is applied by applyPendingSwitch once the learner pauses.
+    if (attempt.status === 'finished' && !pendingSwitch && exercise.mode === 'wait') newAttempt({ keepResult: true });
+  }, REARM_MS);
+}
+
+/** True while the learner is in the middle of something a screen change would disturb. */
+function learnerBusy() {
+  if (view !== 'exercise') return false;
+  const now = performance.now();
+  if (now - lastKeyAt < 2000) return true;
+  return (attempt.status === 'playing' || attempt.status === 'countin') && tracker && !tracker.finished && tracker.stepIndex > 0 && now - attempt.lastActivity < 5000;
+}
+
+/** Load the exercise the coach queued up, once the learner has stopped playing. */
+function applyPendingSwitch() {
+  if (!pendingSwitch || learnerBusy()) return;
+  loadExercise(pendingSwitch.exercise, { parent: pendingSwitch.parent, keepResult: true });
+}
+
+/**
+ * Send a try to the coach, but not more often than every MIN_REPORT_GAP_MS: a three-note drill
+ * can be played twenty times a minute, and each report is a paid reply. The newest try is kept
+ * and says how many tries it stands for.
+ */
+function reportAttempt(event, clean) {
+  sinceReport.tries += 1;
+  if (clean) sinceReport.clean += 1;
+  heldReport = event;
+  clearTimeout(heldTimer);
+  const wait = lastReportAt + MIN_REPORT_GAP_MS - Date.now();
+  if (wait <= 0) flushReport();
+  else heldTimer = setTimeout(flushReport, wait);
+}
+
+function flushReport() {
+  clearTimeout(heldTimer);
+  const event = heldReport;
+  heldReport = null;
+  if (!event) return;
+  const tally = sinceReport;
+  sinceReport = { tries: 0, clean: 0 };
+  if (event.exercise?.id !== exercise?.id) return; // the exercise changed while it waited
+  if (tally.tries > 1) {
+    event.text += `\nTries since your last reply: ${tally.tries}, of which clean: ${tally.clean}. The numbers above describe the newest try.`;
+    event.label = `${event.label} (${tally.tries} tries since the last reply)`;
+  }
+  lastReportAt = Date.now();
+  coach.enqueue(event);
 }
 
 /** After several wrong tries on one step: flash the key, and ask the coach once in a while. */
 function maybeAutoHint() {
   if (attempt.wrongOnStep < 4 || attempt.hintedStep === tracker.stepIndex) return;
+  // Before the first right note, wrong keys are often just warming up: ask for more evidence.
+  if (tracker.stepIndex === 0 && attempt.wrongOnStep < 6) return;
   attempt.hintedStep = tracker.stepIndex;
   flashTargets();
   const now = Date.now();
@@ -332,6 +486,14 @@ function flashTargets() {
 
 function requestHint({ auto = false } = {}) {
   if (!exercise || !tracker) return;
+  if (tracker.finished || attempt.status === 'finished') {
+    // The try is over: a hint is about the first step of the next one.
+    if (exercise.mode !== 'wait') {
+      setStatus('Press Start first. Hints work while a try is under way.');
+      return;
+    }
+    newAttempt({ keepResult: true });
+  }
   flashTargets();
   const stepRecord = tracker.result().steps[tracker.stepIndex];
   coach.enqueue({
@@ -358,6 +520,7 @@ function finishAttempt() {
   stopMetronome();
   const result = tracker.result();
   lastResult = result;
+  finishedCount += 1;
   attempt.status = 'finished';
   attempt.finishedAt = performance.now();
   refreshProgress();
@@ -368,33 +531,22 @@ function finishAttempt() {
   attemptCounts.set(exercise.id, count);
   recordProgress(result);
 
-  if (pendingSwitch) {
-    // The coach already moved on while this attempt was under way.
-    const { exercise: nextExercise, parent } = pendingSwitch;
-    finishTimer = setTimeout(() => loadExercise(nextExercise, { parent, keepResult: true }), 1200);
-    return;
-  }
-
-  let text = summary.renderAttempt({
-    exercise,
-    result,
-    attemptNumber: count,
-    previous: previousResults.get(exercise.id) ?? null,
-  });
-  if (count === 1) text += `\nSteps of this exercise: ${describeExercise(exercise)}`;
-  text += drillContext();
+  const previous = previousResults.get(exercise.id) ?? null;
   previousResults.set(exercise.id, result);
-  coach.enqueue({
-    kind: 'attempt',
-    text,
-    label: `Try ${count}: ${Math.round(result.totals.accuracy * 100)}% clean`,
-  });
 
-  if (exercise.mode === 'wait') {
-    finishTimer = setTimeout(() => {
-      if (attempt.status === 'finished') newAttempt({ keepResult: true });
-    }, 1500);
-  }
+  // The coach already moved on while this try was under way: no report, the switch follows.
+  if (pendingSwitch) return;
+
+  let text = summary.renderAttempt({ exercise, result, attemptNumber: count, previous });
+  if (count === 1) text += `\nSteps of this exercise: ${describeExercise(exercise)}`;
+  if (attempt.virtualNotes && !attempt.pianoNotes) text += '\nPlayed on the on-screen keys: every note has the same loudness, so loudness says nothing here.';
+  text += drillContext();
+  reportAttempt(
+    { kind: 'attempt', text, label: `Try ${count}: ${Math.round(result.totals.accuracy * 100)}% clean`, exercise },
+    result.totals.accuracy >= 0.9,
+  );
+
+  if (exercise.mode === 'wait') scheduleAfterAttempt();
 }
 
 function showResult(result) {
@@ -403,15 +555,20 @@ function showResult(result) {
   chips.push({ text: `${pct}% clean`, tone: pct >= 90 ? 'good' : pct < 70 ? 'bad' : null });
   if (result.totals.wrongNotes) chips.push({ text: `${result.totals.wrongNotes} wrong ${result.totals.wrongNotes === 1 ? 'note' : 'notes'}`, tone: 'bad' });
   if (result.totals.missed) chips.push({ text: `${result.totals.missed} missed`, tone: 'bad' });
+  if (result.totals.mistimed) chips.push({ text: `${result.totals.mistimed} off the beat`, tone: 'bad' });
   if (result.mode === 'tempo') {
     const { meanOffsetMs, offsetSdMs } = result.timing;
+    // Plain words, with limits wider than the timing error Bluetooth itself can add.
     if (Number.isFinite(meanOffsetMs)) {
-      const ms = Math.round(Math.abs(meanOffsetMs));
-      chips.push({ text: ms < 25 ? 'On the beat' : `${ms} ms ${meanOffsetMs > 0 ? 'late' : 'early'} on average` });
+      const ms = Math.abs(meanOffsetMs);
+      const side = meanOffsetMs > 0 ? 'late' : 'early';
+      chips.push({ text: ms < 40 ? 'With the click' : ms <= 120 ? `A little ${side}` : side === 'late' ? 'Late' : 'Early', tone: ms < 40 ? 'good' : null });
     }
-    if (Number.isFinite(offsetSdMs)) chips.push({ text: `Timing spread ${Math.round(offsetSdMs)} ms` });
+    if (Number.isFinite(offsetSdMs)) {
+      chips.push({ text: offsetSdMs < 40 ? 'Steady' : offsetSdMs <= 80 ? 'A bit unsteady' : 'Unsteady', tone: offsetSdMs < 40 ? 'good' : null });
+    }
   } else {
-    if (Number.isFinite(result.timing.estBpm)) chips.push({ text: `About ${Math.round(result.timing.estBpm)} bpm` });
+    // No pace chip here: nothing sets the pace in this mode, so a bpm number would mislead.
     const cv = result.timing.evennessCv;
     if (Number.isFinite(cv)) chips.push({ text: cv < 0.1 ? 'Very even' : cv < 0.2 ? 'Fairly even' : 'Uneven rhythm', tone: cv < 0.1 ? 'good' : null });
     if (result.timing.hesitations?.length) chips.push({ text: `${result.timing.hesitations.length} ${result.timing.hesitations.length === 1 ? 'hesitation' : 'hesitations'}` });
@@ -434,16 +591,19 @@ function showResult(result) {
 function recordProgress(result) {
   const progress = state.progress;
   const pct = Math.round(result.totals.accuracy * 100);
-  const bpm = Math.round(result.mode === 'tempo' ? result.bpm : (result.timing.estBpm ?? exercise.bpm));
+  const withClick = result.mode === 'tempo';
+  const bpm = Math.round(result.bpm);
   const entry = progress.exercises[exercise.id] ?? { title: exercise.title, attempts: 0, bestAccuracy: 0, bestBpm: 0, lastAt: null };
   entry.title = exercise.title;
   entry.attempts += 1;
   entry.bestAccuracy = Math.max(entry.bestAccuracy, pct);
-  if (result.completed && pct >= 90) entry.bestBpm = Math.max(entry.bestBpm, bpm);
+  // Only a metronome try says anything about tempo.
+  if (withClick && result.completed && pct >= 90) entry.bestBpm = Math.max(entry.bestBpm, bpm);
   entry.lastAt = new Date().toISOString();
   progress.exercises[exercise.id] = entry;
   progress.lastPracticed = todayKey();
-  progress.recent = [`${exercise.title}: ${pct}% clean at about ${bpm} bpm`, ...progress.recent].slice(0, 8);
+  const how = withClick ? `with the metronome at ${bpm} bpm` : 'in learn-the-notes mode';
+  progress.recent = [`${exercise.title}: ${pct}% clean ${how}`, ...progress.recent].slice(0, 8);
   saveState(state);
 }
 
@@ -614,7 +774,10 @@ function updateFreePlayChord() {
 }
 
 function onPhrase(phrase) {
-  if (phrase.key) $('fp-key').textContent = `${phrase.key.tonic} ${phrase.key.mode}`;
+  // Only name a key the analysis is reasonably sure of.
+  const sure = phrase.key && phrase.key.confidence >= 0.3;
+  $('fp-key').textContent = sure ? `${phrase.key.tonic} ${phrase.key.mode}` : 'Unclear';
+  if (sure) freePlayKey = { tonic: phrase.key.tonic, mode: phrase.key.mode };
   if (phrase.tempo) $('fp-tempo').textContent = `${Math.round(phrase.tempo.bpm)} bpm`;
   if (Number.isFinite(phrase.evennessCv)) {
     $('fp-even').textContent = phrase.evennessCv < 0.1 ? 'Very even' : phrase.evennessCv < 0.2 ? 'Fairly even' : 'Uneven';
@@ -638,11 +801,12 @@ function onPhrase(phrase) {
 function updateLive() {
   const held = [...input.held.keys()].sort((a, b) => a - b);
   if (held.length) {
-    const names = held.map((midi) => midiToName(midi)).join(' ');
+    const names = held.map((midi) => nameOf(midi)).join(' ');
     const chord = held.length >= 3 ? detectChord(held) : null;
     els.liveNotes.textContent = chord ? `${names}  =  ${chord.name}` : names;
   } else if (lastNote) {
-    els.liveNotes.textContent = `Last note: ${midiToName(lastNote.midi)}, loudness ${lastNote.velocity} of 127`;
+    const loudness = lastNote.velocity < 50 ? 'soft' : lastNote.velocity > 90 ? 'loud' : 'medium loud';
+    els.liveNotes.textContent = `Last note: ${nameOf(lastNote.midi)}, ${loudness}`;
   }
 }
 
@@ -695,8 +859,23 @@ function onStatus(status) {
   pill.title = status.message ?? '';
   els.connect.textContent = status.state === 'connected' ? 'Connection' : 'Connect piano';
   els.connect.classList.toggle('btn-primary', status.state !== 'connected');
-  $('connect-disconnect').hidden = status.state === 'disconnected';
-  if (status.state === 'error' && status.message) showConnectError(status.message);
+  $('connect-disconnect').hidden = !['connected', 'connecting', 'reconnecting'].includes(status.state);
+  if (status.state === 'reconnecting' && view === 'exercise') {
+    connectionNotice = true;
+    setStatus('The piano lost its Bluetooth connection. Trying to reconnect...', 'bad');
+  } else if (status.state === 'connected' && connectionNotice) {
+    connectionNotice = false;
+    setStatus('The piano is connected again. Carry on.', 'good');
+    refreshProgress();
+  }
+  if (status.state === 'error' && status.message) {
+    showConnectError(status.message);
+    // The dialog is usually closed when a reconnect gives up: say it where the learner is looking.
+    if (!$('dlg-connect').open && view === 'exercise') {
+      connectionNotice = true;
+      setStatus(`${status.message} Click Connect piano.`, 'bad');
+    }
+  }
   if (status.state !== 'connected') keyboard.releaseAll();
 }
 
@@ -712,7 +891,8 @@ function openConnectDialog() {
   $('connect-ble').disabled = !support.bluetooth;
   $('connect-ble-all').disabled = !support.bluetooth;
   $('connect-midi').disabled = !support.webmidi;
-  showConnectError('');
+  // Keep the reason of a failed connection visible: it says what to do next.
+  showConnectError(input.status.state === 'error' ? input.status.message ?? '' : '');
   $('dlg-connect').showModal();
 }
 
@@ -742,9 +922,10 @@ async function connect(kind) {
 function sessionStartText() {
   const progress = state.progress;
   return summary.renderSessionStart({
-    profile: state.profile ?? { level: 'beginner', goals: '' },
+    profile: { ...(state.profile ?? { goals: '' }), level: LEVEL_LABELS[state.profile?.level] ?? LEVEL_LABELS.beginner },
     notes: state.notes,
     progress: {
+      today: todayKey(),
       sessions: progress.sessions,
       minutes: Math.round(progress.totalMs / 60000),
       lastPracticed: progress.lastPracticed,
@@ -755,12 +936,23 @@ function sessionStartText() {
 }
 
 /** Apply what the coach decided. Returns a short label for the chat log. */
-function applyCoachAction(action) {
+function applyCoachAction(action, event) {
   if (!action || action.type === 'none') return null;
+  // A drill, tempo change or "back to full" refers to the exercise the report was about. If the
+  // learner has loaded something else, or changed its tempo or mode by hand since, it no longer applies.
+  const relative = action.type === 'drill' || action.type === 'set_tempo' || action.type === 'back_to_full';
+  if (relative && event?.exercise && exercise) {
+    const then = event.exercise;
+    if (then.id !== exercise.id || then.bpm !== exercise.bpm || then.mode !== exercise.mode) return null;
+  }
+  // A hint is about the step the learner is on: it must not swap the exercise under them.
+  if (event?.kind === 'hint') return null;
+  let backToFull = false;
   if (action.type === 'back_to_full') {
     const full = state.session.parent;
     if (!isUsableExercise(full)) return null;
     action = { type: 'new_exercise', exercise: full };
+    backToFull = true;
   }
   if (!isUsableExercise(action.exercise)) return null;
   const next = action.exercise;
@@ -773,16 +965,16 @@ function applyCoachAction(action) {
     parent = state.session.parent ?? null;
     label = `${next.bpm} bpm, ${next.mode === 'tempo' ? 'with the metronome' : 'learn-the-notes mode'}`;
   } else {
-    label = `New exercise: ${next.title}`;
+    label = backToFull ? 'Back to the full exercise' : `New exercise: ${next.title}`;
   }
-  const midAttempt =
-    view === 'exercise' &&
-    tracker &&
-    !tracker.finished &&
-    (attempt.status === 'playing' || attempt.status === 'countin') &&
-    tracker.stepIndex > 0 &&
-    performance.now() - attempt.lastActivity < 5000;
-  if (midAttempt) {
+  if (view === 'freeplay') {
+    // Do not pull the learner out of free play: offer the exercise instead.
+    suggestion = { exercise: next, parent };
+    $('fp-banner-text').textContent = `Your coach suggests: ${next.title}.`;
+    $('fp-banner').hidden = false;
+    return `Suggested: ${next.title}`;
+  }
+  if (learnerBusy()) {
     pendingSwitch = { exercise: next, parent };
     els.bannerText.textContent = `Your coach has the next step ready: ${next.title}.`;
     els.banner.hidden = false;
@@ -911,7 +1103,9 @@ function saveSetup() {
   if (firstRun) {
     beginSession({ fresh: true });
   } else {
-    sendChat('I updated my profile. Here it is again so you can adjust: ' + JSON.stringify(state.profile));
+    const { level, goals, about } = state.profile;
+    const said = `I updated my profile. Level: ${LEVEL_LABELS[level] ?? level}. Goals: ${goals || 'none given'}. About me: ${about || 'nothing added'}.`;
+    coach.enqueue({ kind: 'chat', text: summary.renderChat({ text: said, exercise: view === 'exercise' ? exercise : null, trackerState: null }), you: 'Profile updated.' });
   }
 }
 
@@ -1121,7 +1315,15 @@ function wire() {
   setInterval(() => {
     const phrase = freeplay.tick(performance.now());
     if (phrase) onPhrase(phrase);
+    applyPendingSwitch();
   }, 200);
+  $('fp-banner-open').addEventListener('click', () => {
+    if (!suggestion) return;
+    const { exercise: offered, parent } = suggestion;
+    suggestion = null;
+    $('fp-banner').hidden = true;
+    loadExercise(offered, { parent });
+  });
 
   // The notation is laid out for the width it was drawn at: redraw after a real size change.
   let staffWidth = els.staff.clientWidth;
@@ -1194,11 +1396,14 @@ window.practiceCoach = {
   get lastResult() {
     return lastResult;
   },
+  get finishedCount() {
+    return finishedCount;
+  },
   get connection() {
     return input.status;
   },
   get coachIdle() {
-    return coach.idle;
+    return coach.idle && !heldReport;
   },
 };
 

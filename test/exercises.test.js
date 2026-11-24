@@ -1485,13 +1485,14 @@ describe('STARTER_EXERCISES', () => {
       'custom',
       'scale:C:major:right:1:up_down:4',
       'scale:C:major:left:1:up_down:3',
-      'scale:C:major:both:1:up_down:4',
       'scale:G:major:right:1:up_down:4',
       'scale:F:major:right:1:up_down:4',
       'arpeggio:C:major:right:1:up_down:4',
       'chords:C-F-G-C:block:root:right:4',
       'chords:C-Am-F-G:block:smooth:right:4',
       'scale:A:harmonic_minor:right:1:up_down:4',
+      // Hands together is the hardest item, so it comes last.
+      'scale:C:major:both:1:up_down:4',
     ]);
   });
 
@@ -1553,7 +1554,7 @@ describe('STARTER_EXERCISES', () => {
   });
 
   test('the two chord exercises', () => {
-    const [block, smooth] = [built()[10], built()[11]];
+    const [block, smooth] = [built()[9], built()[10]];
     assert.deepEqual(names(block), [['C4', 'E4', 'G4'], ['F4', 'A4', 'C5'], ['G4', 'B4', 'D5'], ['C4', 'E4', 'G4']]);
     assert.deepEqual(names(smooth), [['C4', 'E4', 'G4'], ['C4', 'E4', 'A4'], ['C4', 'F4', 'A4'], ['B3', 'D4', 'G4']]);
     assert.deepEqual(labels(smooth), ['C', 'Am', 'F', 'G']);

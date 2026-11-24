@@ -103,12 +103,13 @@ describe('AttemptTracker, wait mode', () => {
     assert.equal(result.durationMs, 7000);
     assert.equal(result.steps.length, 15);
     assert.deepEqual(result.steps[0], {
-      index: 0, state: 'ok', wrong: [], missed: [], ioiMs: null, offsetMs: null, velocity: 64, chordSpreadMs: null,
+      index: 0, state: 'ok', wrong: [], missed: [], mistimed: 0, ioiMs: null, offsetMs: null, velocity: 64, chordSpreadMs: null,
     });
     for (const s of result.steps.slice(1)) assert.equal(s.ioiMs, 500);
-    assert.deepEqual(result.totals, { steps: 15, played: 15, clean: 15, wrongNotes: 0, missed: 0, extra: 0, accuracy: 1 });
+    assert.deepEqual(result.totals, { steps: 15, played: 15, clean: 15, wrongNotes: 0, mistimed: 0, missed: 0, extra: 0, accuracy: 1 });
     assert.deepEqual(result.timing, {
       estBpm: 120, evennessCv: 0, hesitations: [], meanOffsetMs: null, offsetSdMs: null, driftMsPerBeat: null,
+      offsetCount: 0, offsetSpanBeats: null,
     });
     assert.deepEqual(result.dynamics, { mean: 64, sd: 0, min: 64, max: 64 });
     assert.deepEqual(result.troubleSpots, []);
@@ -139,7 +140,7 @@ describe('AttemptTracker, wait mode', () => {
     assert.deepEqual(result.steps[3].wrong, [64, 67]);
     assert.equal(result.steps[3].state, 'error');
     assert.deepEqual(result.totals, {
-      steps: 15, played: 15, clean: 14, wrongNotes: 2, missed: 0, extra: 0, accuracy: 0.9333,
+      steps: 15, played: 15, clean: 14, wrongNotes: 2, mistimed: 0, missed: 0, extra: 0, accuracy: 0.9333,
     });
     assert.equal(result.troubleSpots[0].index, 3);
     assert.deepEqual(result.troubleSpots[0].names, ['F4']);
@@ -318,7 +319,7 @@ describe('AttemptTracker, wait mode', () => {
     assert.equal(result.steps[5].velocity, null);
     assert.equal(result.steps[6].ioiMs, null);
     assert.deepEqual(result.totals, {
-      steps: 15, played: 5, clean: 5, wrongNotes: 1, missed: 0, extra: 0, accuracy: 0.3333,
+      steps: 15, played: 5, clean: 5, wrongNotes: 1, mistimed: 0, missed: 0, extra: 0, accuracy: 0.3333,
     });
     assert.equal(result.durationMs, 2600); // first right note at 1000, last key event at 3600
     assert.equal(result.timing.estBpm, 120);
@@ -334,7 +335,7 @@ describe('AttemptTracker, wait mode', () => {
     assert.equal(result.totals.played, 0);
     assert.equal(result.totals.clean, 0);
     assert.deepEqual(result.steps[0], {
-      index: 0, state: 'current', wrong: [], missed: [], ioiMs: null, offsetMs: null, velocity: null, chordSpreadMs: null,
+      index: 0, state: 'current', wrong: [], missed: [], mistimed: 0, ioiMs: null, offsetMs: null, velocity: null, chordSpreadMs: null,
     });
     assert.deepEqual(result.dynamics, { mean: null, sd: null, min: null, max: null });
     assert.deepEqual(tracker.pendingNotes(), [67]);
@@ -354,7 +355,8 @@ describe('AttemptTracker, wait mode', () => {
     assert.deepEqual(result.timing.hesitations, [{ index: 5, factor: 3 }]);
     assert.equal(result.steps[5].ioiMs, 1500);
     assert.equal(result.timing.estBpm, 120);
-    assert.ok(result.timing.evennessCv > 0.3);
+    // The 1500 ms pause is reported as a hesitation and left out of evenness; the 700 ms gap still counts.
+    assert.ok(result.timing.evennessCv > 0.05 && result.timing.evennessCv < 0.2);
     assert.deepEqual(result.troubleSpots, [{ index: 5, names: ['A4'], reason: 'hesitation' }]);
     assert.equal(result.totals.accuracy, 1); // a hesitation is not a wrong note
   });
@@ -468,9 +470,10 @@ describe('AttemptTracker, wait mode', () => {
     tap(tracker, 60, 100, { velocity: 90 });
     const result = tracker.result();
     assert.equal(result.completed, true);
-    assert.deepEqual(result.totals, { steps: 1, played: 1, clean: 1, wrongNotes: 0, missed: 0, extra: 0, accuracy: 1 });
+    assert.deepEqual(result.totals, { steps: 1, played: 1, clean: 1, wrongNotes: 0, mistimed: 0, missed: 0, extra: 0, accuracy: 1 });
     assert.deepEqual(result.timing, {
       estBpm: null, evennessCv: null, hesitations: [], meanOffsetMs: null, offsetSdMs: null, driftMsPerBeat: null,
+      offsetCount: 0, offsetSpanBeats: null,
     });
     assert.deepEqual(result.dynamics, { mean: 90, sd: 0, min: 90, max: 90 });
   });
@@ -607,9 +610,10 @@ describe('AttemptTracker, tempo mode', () => {
     assert.equal(result.bpm, 100);
     assert.equal(result.completed, true);
     assert.equal(result.durationMs, 14 * 600);
-    assert.deepEqual(result.totals, { steps: 15, played: 15, clean: 15, wrongNotes: 0, missed: 0, extra: 0, accuracy: 1 });
+    assert.deepEqual(result.totals, { steps: 15, played: 15, clean: 15, wrongNotes: 0, mistimed: 0, missed: 0, extra: 0, accuracy: 1 });
     assert.deepEqual(result.timing, {
       estBpm: 100, evennessCv: 0, hesitations: [], meanOffsetMs: 0, offsetSdMs: 0, driftMsPerBeat: 0,
+      offsetCount: 15, offsetSpanBeats: 14,
     });
     assert.ok(result.steps.every((s) => s.state === 'ok' && s.offsetMs === 0));
     assert.deepEqual(result.troubleSpots, []);
@@ -702,7 +706,7 @@ describe('AttemptTracker, tempo mode', () => {
     assert.deepEqual(result.steps.map((s) => s.state), ['ok', 'missed', 'ok', 'missed']);
     assert.deepEqual(result.steps[1].missed, [62]);
     assert.equal(result.steps[1].offsetMs, null);
-    assert.deepEqual(result.totals, { steps: 4, played: 2, clean: 2, wrongNotes: 0, missed: 2, extra: 0, accuracy: 0.5 });
+    assert.deepEqual(result.totals, { steps: 4, played: 2, clean: 2, wrongNotes: 0, mistimed: 0, missed: 2, extra: 0, accuracy: 0.5 });
     assert.equal(result.durationMs, 1725); // to the end of the last window
     assert.equal(result.steps[2].ioiMs, 1000);
     assert.equal(result.timing.estBpm, 120); // 1000 ms over 2 beats
@@ -748,7 +752,7 @@ describe('AttemptTracker, tempo mode', () => {
     assert.deepEqual(result.steps[1].wrong, [63]);
     assert.deepEqual(result.steps[1].missed, [62]);
     assert.equal(result.steps[1].state, 'missed');
-    assert.deepEqual(result.totals, { steps: 4, played: 3, clean: 3, wrongNotes: 1, missed: 1, extra: 0, accuracy: 0.75 });
+    assert.deepEqual(result.totals, { steps: 4, played: 3, clean: 3, wrongNotes: 1, mistimed: 0, missed: 1, extra: 0, accuracy: 0.75 });
     assert.deepEqual(result.troubleSpots, [{ index: 1, names: ['D4'], reason: 'missed' }]);
   });
 
@@ -789,9 +793,11 @@ describe('AttemptTracker, tempo mode', () => {
     late.noteOn(65, 64, 3000);
     let result = late.result();
     assert.deepEqual(result.steps.map((s) => s.state), ['ok', 'missed', 'ok', 'ok']);
-    assert.deepEqual(result.steps[1].wrong, [62]);
+    // The right key at the wrong time is a timing fault, not a wrong note.
+    assert.deepEqual(result.steps[1].wrong, []);
+    assert.equal(result.steps[1].mistimed, 1);
     assert.deepEqual(result.steps[1].missed, [62]);
-    assert.deepEqual(result.totals, { steps: 4, played: 3, clean: 3, wrongNotes: 1, missed: 1, extra: 0, accuracy: 0.75 });
+    assert.deepEqual(result.totals, { steps: 4, played: 3, clean: 3, wrongNotes: 0, mistimed: 1, missed: 1, extra: 0, accuracy: 0.75 });
     assert.deepEqual(result.troubleSpots, [{ index: 1, names: ['D4'], reason: 'late' }]);
 
     // D comes 650 ms late, closer to the E that follows: still D's mistake, E stays clean.
@@ -824,7 +830,9 @@ describe('AttemptTracker, tempo mode', () => {
     twice.noteOn(65, 64, 3000);
     result = twice.result();
     assert.deepEqual(result.steps.map((s) => s.state), ['ok', 'ok', 'error', 'ok']);
-    assert.deepEqual(result.troubleSpots, [{ index: 2, names: ['E4'], reason: 'wrong_notes' }]);
+    assert.equal(result.totals.wrongNotes, 0);
+    assert.equal(result.totals.mistimed, 1);
+    assert.deepEqual(result.troubleSpots, [{ index: 2, names: ['E4'], reason: 'early' }]);
   });
 
   test('notes before the first window or after the last are extra and belong to no step', () => {
@@ -920,6 +928,7 @@ describe('AttemptTracker, tempo mode', () => {
     const none = tempoTracker();
     assert.deepEqual(none.result().timing, {
       estBpm: null, evennessCv: null, hesitations: [], meanOffsetMs: null, offsetSdMs: null, driftMsPerBeat: null,
+      offsetCount: 0, offsetSpanBeats: null,
     });
   });
 
@@ -951,7 +960,7 @@ describe('AttemptTracker, tempo mode', () => {
     assert.equal(result.steps[1].offsetMs, 20);
     assert.equal(result.steps[1].chordSpreadMs, 40);
     assert.deepEqual(result.steps[1].missed, [65]);
-    assert.deepEqual(result.totals, { steps: 2, played: 2, clean: 1, wrongNotes: 0, missed: 1, extra: 0, accuracy: 0.5 });
+    assert.deepEqual(result.totals, { steps: 2, played: 2, clean: 1, wrongNotes: 0, mistimed: 0, missed: 1, extra: 0, accuracy: 0.5 });
     assert.equal(result.timing.meanOffsetMs, 10); // (-10 + 0 + 20 + 0 + 40) / 5
     assert.deepEqual(result.troubleSpots, [{ index: 1, names: ['D4', 'F4', 'A4'], reason: 'missed' }]);
   });
@@ -983,7 +992,8 @@ describe('AttemptTracker, tempo mode', () => {
     assert.equal(tracker.noteOn(64, 64, 1500).finished, true);
     const result = tracker.result();
     assert.equal(result.totals.steps, 3);
-    assert.equal(result.totals.wrongNotes, 1);
+    assert.equal(result.totals.wrongNotes, 0); // the early D was the right key at the wrong time
+    assert.equal(result.totals.mistimed, 1);
     assert.equal(result.steps[2].ioiMs, 1010);
   });
 
@@ -1013,7 +1023,7 @@ describe('AttemptTracker, tempo mode', () => {
     assert.deepEqual(tracker.tick(11725 + 121), { missed: [3], finished: true });
     const result = tracker.result();
     assert.equal(result.completed, true);
-    assert.deepEqual(result.totals, { steps: 4, played: 0, clean: 0, wrongNotes: 0, missed: 4, extra: 0, accuracy: 0 });
+    assert.deepEqual(result.totals, { steps: 4, played: 0, clean: 0, wrongNotes: 0, mistimed: 0, missed: 4, extra: 0, accuracy: 0 });
     assert.deepEqual(result.dynamics, { mean: null, sd: null, min: null, max: null });
     assert.equal(result.troubleSpots.length, 4);
     assert.equal(tracker.noteOn(60, 64, 12000).kind, 'ignored');

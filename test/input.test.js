@@ -2051,11 +2051,12 @@ describe('virtual input', () => {
   });
 
   it('velocity 0 is a release, a second noteOff does nothing, a second noteOn retriggers', () => {
-    const { input, events } = setup();
+    const { clock, input, events } = setup();
     input.noteOn(60);
     input.noteOn(60, 0);
     input.noteOff(60);
     input.noteOn(62);
+    clock.t += 100; // a real second strike, not the same press arriving twice
     input.noteOn(62, 100);
     assert.deepEqual(
       events.notes().map((note) => [note.type, note.midi]),
@@ -2067,6 +2068,23 @@ describe('virtual input', () => {
         ['on', 62],
       ],
     );
+  });
+
+  it('a layered voice (the same key on two channels at once) is one key press', async () => {
+    const { clock, piano, input, events } = setup();
+    await input.connectBluetooth();
+    // Piano plus strings: note-on on channel 1 and channel 2 in one packet, then both note-offs.
+    piano.packet(pkt(clock.t, [0x90, 60, 80], [0x91, 60, 80]));
+    clock.t += 300;
+    piano.packet(pkt(clock.t, [0x80, 60, 0], [0x81, 60, 0]));
+    assert.deepEqual(
+      events.notes().map((note) => [note.type, note.midi]),
+      [
+        ['on', 60],
+        ['off', 60],
+      ],
+    );
+    assert.equal(input.held.size, 0);
   });
 
   it('works next to a connected piano and survives its disconnect', async () => {

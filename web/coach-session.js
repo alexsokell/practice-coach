@@ -66,7 +66,7 @@ export class CoachSession {
    * @param {() => {messages: object[], log: object[]}} options.getSession   live session object (mutated in place)
    * @param {() => object|null} options.getExercise     the exercise loaded right now
    * @param {() => string} options.buildPreamble        session-start text used when the transcript is trimmed
-   * @param {(action: object) => string|null} options.onAction   apply an action, return a label to show (or null)
+   * @param {(action: object, event: object) => string|null} options.onAction   apply an action (event = the request it answers), return a label to show (or null)
    * @param {(text: string) => void} options.onNotes
    * @param {(done: object) => void} options.onDone
    * @param {() => void} options.onChange            persist
@@ -128,6 +128,11 @@ export class CoachSession {
     this.#pump();
   }
 
+  /** Drop events still waiting in the queue (not the one in flight) that match the test. */
+  discardQueued(predicate) {
+    this.queue = this.queue.filter((event) => !predicate(event));
+  }
+
   #pump() {
     if (this.busy || !this.queue.length) return;
     const wait = this.lastSentAt + MIN_GAP_MS - Date.now();
@@ -175,7 +180,7 @@ export class CoachSession {
         },
         onAction: (action) => {
           if (!current()) return;
-          actionLabel = this.onAction(action) ?? null;
+          actionLabel = this.onAction(action, event) ?? null;
         },
         onNotes: (text) => {
           if (current()) this.onNotes(text);

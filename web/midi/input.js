@@ -1079,19 +1079,21 @@ export class MidiInput extends EventTarget {
   /**
    * Key down. Rules that keep 'on' and 'off' strictly alternating for each key:
    *
-   * - The key is already down, from the same port: real instruments do this (a fast repeated
-   *   note on a triple-sensor action may come without a note-off, and MIDI leaves it to the
-   *   receiver). The first note is closed with an 'off' at the time of the new 'on', so every
-   *   consumer sees two clean notes.
-   * - The key is already down, from another port, within DUPLICATE_NOTE_MS: one instrument
-   *   showing up on two ports. It is one key press, the copy is ignored.
+   * - The key is already down and the new note-on comes within DUPLICATE_NOTE_MS: it is the same
+   *   key press arriving twice, and the copy is ignored. That happens when one instrument shows
+   *   up on two ports, and when a piano with two layered voices (piano plus strings, say) sends
+   *   every key on two channels. No finger can strike a key twice that fast.
+   * - The key is already down, from the same port, later than that: real instruments do this (a
+   *   fast repeated note on a triple-sensor action may come without a note-off, and MIDI leaves
+   *   it to the receiver). The first note is closed with an 'off' at the time of the new 'on', so
+   *   every consumer sees two clean notes.
    * - The key is already down, from another port or from virtual input, earlier than that: the
    *   new press takes the key over (an 'off' for the old holder, then the 'on').
    */
   #noteOn(midi, velocity, time, channel, source, origin) {
     const current = this.#held.get(midi);
     if (current) {
-      if (current.origin !== origin && Math.abs(time - current.time) <= DUPLICATE_NOTE_MS) return;
+      if (Math.abs(time - current.time) <= DUPLICATE_NOTE_MS) return;
       this.#held.delete(midi);
       this.#emit('note', {
         type: 'off',

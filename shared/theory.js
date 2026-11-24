@@ -785,8 +785,13 @@ const KK_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.
 /** Conventional tonic spelling for each pitch class: the key with at most six sharps or flats. */
 const MAJOR_TONICS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 const MINOR_TONICS = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'];
-/** Gap between the best and the second best correlation that counts as full confidence. */
+/** Gap between the best and the second best score that counts as full confidence. */
 const KEY_GAP_FOR_FULL_CONFIDENCE = 0.2;
+/** Scale degrees (semitones above the tonic) that belong to a key. Minor: natural plus the raised 7th. */
+const KEY_SCALE_MAJOR = new Set([0, 2, 4, 5, 7, 9, 11]);
+const KEY_SCALE_MINOR = new Set([0, 2, 3, 5, 7, 8, 10, 11]);
+/** How much correlation one unit of out-of-scale playing costs (0.1 of the notes outside = 0.2). */
+const KEY_OUTSIDE_PENALTY = 2;
 
 function pearson(a, b) {
   const n = a.length;
@@ -811,7 +816,8 @@ function pearson(a, b) {
  * Estimate the key from how much each pitch class was played (Krumhansl-Schmuckler: correlate the
  * weights with the 24 rotated Krumhansl-Kessler profiles). Weights are typically summed note
  * durations or note counts per pitch class, index 0 = C.
- * confidence is the gap between the best and the second best correlation, scaled so that a gap of
+ * Each key's correlation is lowered by the share of the playing that lies outside its scale.
+ * confidence is the gap between the best and the second best score, scaled so that a gap of
  * 0.2 or more is 1, and 0 when even the best key does not correlate positively.
  * @param {ArrayLike<number>} pcWeights  12 non-negative numbers
  * @returns {KeyEstimate|null} null when the input is not 12 numbers or carries no information
@@ -826,17 +832,30 @@ export function estimateKey(pcWeights) {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
   });
   if (weights.every((value) => value === weights[0])) return null;
+  const total = weights.reduce((sum, value) => sum + value, 0);
   const results = [];
-  for (const [mode, profile, tonics] of [['major', KK_MAJOR, MAJOR_TONICS], ['minor', KK_MINOR, MINOR_TONICS]]) {
+  for (const [mode, profile, tonics, scale] of [
+    ['major', KK_MAJOR, MAJOR_TONICS, KEY_SCALE_MAJOR],
+    ['minor', KK_MINOR, MINOR_TONICS, KEY_SCALE_MINOR],
+  ]) {
     for (let tonicPc = 0; tonicPc < 12; tonicPc++) {
       const rotated = weights.map((_, i) => weights[(i + tonicPc) % 12]);
-      results.push({ tonic: tonics[tonicPc], mode, r: pearson(rotated, profile) });
+      // Share of what was played that is not in this key's scale. A tune with a clear F natural is
+      // not in E minor, however well the rest of it fits the profile.
+      let outside = 0;
+      for (let i = 0; i < 12; i++) if (!scale.has(i)) outside += rotated[i];
+      const r = pearson(rotated, profile);
+      results.push({ tonic: tonics[tonicPc], mode, r, score: r - KEY_OUTSIDE_PENALTY * (outside / total) });
     }
   }
-  results.sort((a, b) => b.r - a.r);
+  results.sort((a, b) => b.score - a.score);
   const [best, second] = results;
-  const gap = Math.max(0, best.r - second.r);
-  const confidence = best.r > 0 ? Math.min(1, gap / KEY_GAP_FOR_FULL_CONFIDENCE) : 0;
+  const gap = Math.max(0, best.score - second.score);
+  // A few pitch classes cannot pin down a key, however cleanly they fit one: 3 give at most 0.25,
+  // 6 or more can reach 1.
+  const distinct = weights.filter((value) => value > 0).length;
+  const enough = Math.max(0, Math.min(1, (distinct - 2) / 4));
+  const confidence = best.r > 0 ? Math.min(1, gap / KEY_GAP_FOR_FULL_CONFIDENCE) * enough : 0;
   return { tonic: best.tonic, mode: best.mode, confidence };
 }
 

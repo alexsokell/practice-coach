@@ -37,7 +37,7 @@ import { detectChord, estimateKey, spellMidi } from './theory.js';
  * @property {boolean} completed
  * @property {number} durationMs
  * @property {StepResult[]} steps    one entry per exercise step, rests included
- * @property {{steps: number, played: number, clean: number, wrongNotes: number, missed: number,
+ * @property {{steps: number, played: number, clean: number, wrongNotes: number, mistimed: number, missed: number,
  *   extra: number, accuracy: number}} totals   steps = playable steps (rests are not counted);
  *   missed = expected notes never hit; extra = tempo-mode notes outside the exercise's time span;
  *   accuracy = clean / steps, 0..1
@@ -213,6 +213,7 @@ function buildRecords(exercise) {
       wrong: [],
       wrongCount: 0,
       ownStray: 0, // tempo mode: +1 / -1 when the step's own key was struck too late / too early to count
+      mistimedCount: 0, // tempo mode: how often the step's own key was struck outside its window
       resolved: false,
       timeMs: null, // wait mode: when the step was completed
       relDueMs: 0, // tempo mode: time of the step after beat 0
@@ -384,6 +385,7 @@ export class AttemptTracker {
     let played = 0;
     let clean = 0;
     let wrongNotes = 0;
+    let mistimedNotes = 0;
     let missedNotes = 0;
 
     for (const rec of this.#recs) {
@@ -396,12 +398,14 @@ export class AttemptTracker {
         state,
         wrong: rec.wrong.slice(),
         missed,
+        mistimed: rec.mistimedCount,
         ioiMs: null,
         offsetMs: null,
         velocity: null,
         chordSpreadMs: null,
       };
       wrongNotes += rec.wrongCount;
+      mistimedNotes += rec.mistimedCount;
       missedNotes += missed.length;
       if (counted) {
         played += 1;
@@ -439,11 +443,6 @@ export class AttemptTracker {
     const paceValues = paces.map((p) => p.pace);
     const usualPace = lowerMedian(paceValues);
     const estBpm = usualPace !== null && usualPace > 0 ? roundTo(60000 / usualPace, 1) : null;
-    let evennessCv = null;
-    if (sequence.length >= 4 && paceValues.length >= 3) {
-      const paceMean = mean(paceValues);
-      if (paceMean > 0) evennessCv = roundTo(stdDev(paceValues) / paceMean, 3);
-    }
     const hesitations = [];
     if (!tempo && usualPace !== null && usualPace > 0) {
       for (const p of paces) {
@@ -452,6 +451,15 @@ export class AttemptTracker {
           hesitations.push({ index: p.index, factor: roundTo(factor, 2) });
         }
       }
+    }
+    // Evenness describes the flow between pauses: a gap already reported as a hesitation is left
+    // out, or one stop would make an otherwise steady run read as uneven.
+    let evennessCv = null;
+    const paused = new Set(hesitations.map((h) => h.index));
+    const flowing = paces.filter((p) => !paused.has(p.index)).map((p) => p.pace);
+    if (sequence.length >= 4 && flowing.length >= 3) {
+      const paceMean = mean(flowing);
+      if (paceMean > 0) evennessCv = roundTo(stdDev(flowing) / paceMean, 3);
     }
 
     let driftMsPerBeat = null;
@@ -473,6 +481,7 @@ export class AttemptTracker {
         played,
         clean,
         wrongNotes,
+        mistimed: mistimedNotes,
         missed: missedNotes,
         extra: this.#strayExtras,
         accuracy: total ? roundTo(clean / total, 4) : 0,
@@ -484,6 +493,9 @@ export class AttemptTracker {
         meanOffsetMs: offsets.length ? roundTo(mean(offsets), 1) : null,
         offsetSdMs: offsets.length >= 2 ? roundTo(stdDev(offsets), 1) : null,
         driftMsPerBeat,
+        // What the drift is based on, so a reader can tell a trend from scatter.
+        offsetCount: offsets.length,
+        offsetSpanBeats: offsetBeats.length ? roundTo(Math.max(...offsetBeats) - Math.min(...offsetBeats), 2) : null,
       },
       dynamics: dynamicsOf(velocities),
       troubleSpots: this.#troubleSpots(steps, hesitations),
@@ -536,7 +548,7 @@ export class AttemptTracker {
     if (!rec.resolved) return rec.index === this.#cursor && !this.#finished ? 'current' : 'pending';
     const hits = rec.slots.reduce((count, slot) => count + (slot.hit ? 1 : 0), 0);
     if (hits === 0) return 'missed';
-    return hits === rec.slots.length && rec.wrongCount === 0 ? 'ok' : 'error';
+    return hits === rec.slots.length && rec.wrongCount === 0 && rec.mistimedCount === 0 ? 'ok' : 'error';
   }
 
   #recordWrong(rec, midi) {
@@ -666,8 +678,13 @@ export class AttemptTracker {
       const owns = (rec) => Boolean(rec) && rec.slots.some((s) => !s.hit && this.#matches(s.note, midi));
       let target = nearest.rec;
       if (owns(before) !== owns(after)) target = owns(before) ? before : after;
-      if (owns(target) && target.ownStray === 0) target.ownStray = t >= origin + target.relDueMs ? 1 : -1;
-      this.#recordWrong(target, midi);
+      if (owns(target)) {
+        // The right key at the wrong time is a timing fault, not a wrong note.
+        if (target.ownStray === 0) target.ownStray = t >= origin + target.relDueMs ? 1 : -1;
+        target.mistimedCount += 1;
+      } else {
+        this.#recordWrong(target, midi);
+      }
       return this.#reply('extra', target.index, false, null);
     }
     this.#strayExtras += 1;
@@ -697,6 +714,10 @@ export class AttemptTracker {
       } else if (rec.wrongCount) {
         reason = 'wrong_notes';
         score = 2000 + Math.min(rec.wrongCount, 99) * 10;
+      } else if (rec.mistimedCount) {
+        // Hit in its window, but the same key was also struck well off the beat.
+        reason = rec.ownStray > 0 ? 'late' : 'early';
+        score = 1500 + Math.min(rec.mistimedCount, 99);
       } else if (hesitationFactor.has(index)) {
         reason = 'hesitation';
         score = 1000 + Math.min(999, hesitationFactor.get(index) * 10);

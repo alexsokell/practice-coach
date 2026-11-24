@@ -199,7 +199,13 @@ export function mockReply({ messages, exercise = null }) {
     }
     case 'attempt': {
       const accuracy = readAccuracy(body);
-      const trouble = readStepNumbers(body).filter((n) => n <= (stepCount || Infinity));
+      // Lines that quote an exercise title can contain step numbers too ("Drill: ..., steps 3
+      // to 7"): they must not be read as trouble steps.
+      const withoutTitles = body
+        .split('\n')
+        .filter((line) => !/^(Exercise|Steps of this exercise):/i.test(line) && !/drill cut from/i.test(line))
+        .join('\n');
+      const trouble = readStepNumbers(withoutTitles).filter((n) => n <= (stepCount || Infinity));
       const attemptNumber = readAttemptNumber(body);
       const percent = `${attemptNumber !== null ? `Try ${attemptNumber}: ` : ''}${Math.round(accuracy ?? 0)}`;
       if (accuracy === null) {

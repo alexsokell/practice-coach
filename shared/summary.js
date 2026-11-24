@@ -196,6 +196,9 @@ function resultLine(result, stepCount) {
   }
   if (isNum(totals.wrongNotes)) parts.push(`wrong notes ${totals.wrongNotes}`);
   const tempo = result.mode === 'tempo';
+  if (tempo && isNum(totals.mistimed) && totals.mistimed > 0) {
+    parts.push(`right keys outside the timing window ${totals.mistimed}`);
+  }
   if (isNum(totals.missed) && (tempo || totals.missed > 0)) parts.push(`missed notes ${totals.missed}`);
   if (isNum(totals.extra) && (tempo || totals.extra > 0)) {
     parts.push(`extra notes ${totals.extra}${totals.extra > 0 ? ' (before the first step or after the last)' : ''}`);
@@ -203,7 +206,13 @@ function resultLine(result, stepCount) {
   return `Result: ${join(parts)}`;
 }
 
-function timingLine(result) {
+/** True when every played step of the exercise is one beat long (or the exercise is unknown). */
+function oneBeatSteps(exercise) {
+  const lengths = list(obj(exercise).steps).filter((step) => list(obj(step).notes).length).map((step) => obj(step).beats);
+  return lengths.length === 0 || lengths.every((beats) => beats === 1);
+}
+
+function timingLine(result, exercise) {
   const timing = obj(result.timing);
   const parts = [];
   if (result.mode === 'tempo') {
@@ -211,17 +220,35 @@ function timingLine(result) {
     if (isNum(timing.offsetSdMs)) parts.push(`spread (sd) ${Math.round(timing.offsetSdMs)} ms`);
     if (isNum(timing.driftMsPerBeat)) {
       const drift = timing.driftMsPerBeat;
-      const word = Math.abs(drift) < 1 ? 'steady' : drift > 0 ? 'falling further behind' : 'getting further ahead';
-      parts.push(`drift ${drift > 0 ? '+' : ''}${short(drift)} ms per beat (${word})`);
+      parts.push(`drift ${drift > 0 ? '+' : ''}${short(drift)} ms per beat (${driftWord(result, drift)})`);
     }
     return parts.length ? `Timing against the click: ${join(parts)}` : 'Timing against the click: no notes matched';
   }
-  if (isNum(timing.estBpm)) parts.push(`about ${Math.round(timing.estBpm)} bpm`);
+  // A bpm figure assumes the written note lengths. When steps are longer than a beat (chords held
+  // for four, say) and nothing sets the pace, it would read as wild rushing: give plain seconds.
+  const gaps = list(result.steps).map((step) => obj(step).ioiMs).filter((ms) => isNum(ms) && ms > 0).sort((a, b) => a - b);
+  if (isNum(timing.estBpm) && oneBeatSteps(exercise)) parts.push(`about ${Math.round(timing.estBpm)} bpm`);
+  else if (gaps.length) parts.push(`about ${seconds(gaps[Math.floor((gaps.length - 1) / 2)])} between steps`);
   if (isNum(timing.evennessCv)) parts.push(`evenness ${evennessText(timing.evennessCv)} (100% = equal gaps)`);
   const hesitations = list(timing.hesitations).length;
   if (parts.length || hesitations) parts.push(count(hesitations, 'hesitation'));
   if (isNum(result.durationMs) && result.durationMs > 0) parts.push(`took ${seconds(result.durationMs)}`);
   return parts.length ? `Timing (estimated from the gaps between notes): ${join(parts)}` : 'Timing: too few notes to measure';
+}
+
+/**
+ * Name a drift direction only when it is more than timing scatter: with a handful of notes the
+ * fitted slope is rarely zero even for perfectly steady playing.
+ */
+function driftWord(result, drift) {
+  const timing = obj(result.timing);
+  const matched = isNum(timing.offsetCount) ? timing.offsetCount : list(result.steps).filter((step) => isNum(obj(step).offsetMs)).length;
+  if (matched < 8) return 'too few notes to tell a trend';
+  const sd = isNum(timing.offsetSdMs) ? timing.offsetSdMs : 0;
+  const span = isNum(timing.offsetSpanBeats) && timing.offsetSpanBeats > 0 ? timing.offsetSpanBeats : matched - 1;
+  // Total change in offset from the first matched note to the last, at this slope.
+  if (Math.abs(drift) * span < Math.max(40, sd)) return 'no clear trend';
+  return drift > 0 ? 'falling further behind' : 'getting further ahead';
 }
 
 function troubleLine(spot, exercise, result) {
@@ -264,7 +291,7 @@ function troubleLine(spot, exercise, result) {
   return '';
 }
 
-function changeLine(result, previous) {
+function changeLine(result, previous, exercise) {
   const prev = obj(previous);
   const before = obj(prev.totals);
   const now = obj(result.totals);
@@ -288,7 +315,7 @@ function changeLine(result, previous) {
       parts.push(`spread ${Math.round(t0.offsetSdMs)} -> ${Math.round(t1.offsetSdMs)} ms`);
     }
   } else if (sameMode) {
-    if (isNum(t0.estBpm) && isNum(t1.estBpm)) parts.push(`pace ${Math.round(t0.estBpm)} -> ${Math.round(t1.estBpm)} bpm`);
+    if (isNum(t0.estBpm) && isNum(t1.estBpm) && oneBeatSteps(exercise)) parts.push(`pace ${Math.round(t0.estBpm)} -> ${Math.round(t1.estBpm)} bpm`);
     if (isNum(t0.evennessCv) && isNum(t1.evennessCv)) {
       parts.push(`evenness ${evennessText(t0.evennessCv)} -> ${evennessText(t1.evennessCv)}`);
     }
@@ -328,7 +355,7 @@ export function renderAttempt(input) {
   }
   const judged = { ...result, mode };
   lines.push(resultLine(judged, stepCount));
-  lines.push(timingLine(judged));
+  lines.push(timingLine(judged, exercise));
   const loudness = loudnessLine(result.dynamics);
   if (loudness) lines.push(loudness);
 
@@ -345,7 +372,7 @@ export function renderAttempt(input) {
     lines.push('Trouble spots: none');
   }
   if (previous && typeof previous === 'object') {
-    const change = changeLine(judged, previous);
+    const change = changeLine(judged, previous, exercise);
     if (change) lines.push(change);
   }
   return lines.join('\n');
@@ -357,7 +384,7 @@ export function renderAttempt(input) {
  * The first turn of a session: who the learner is, the coach's own notes, progress, and the
  * exercise on screen.
  * @param {{profile: {name?: string, level?: string, goals?: string, about?: string}|null,
- *   notes: string|null, progress: {sessions?: number, minutes?: number, lastPracticed?: string,
+ *   notes: string|null, progress: {sessions?: number, minutes?: number, lastPracticed?: string, today?: string,
  *   recent?: string[]}|null, exercise: Object|null}} input
  * @returns {string}
  */
@@ -379,6 +406,7 @@ export function renderSessionStart(input) {
     isNum(p.sessions) ? count(Math.round(p.sessions), 'session') : '',
     isNum(p.minutes) ? `${count(Math.round(p.minutes), 'minute')} practiced` : '',
     line(p.lastPracticed, 40) ? `last practiced ${line(p.lastPracticed, 40)}` : '',
+    line(p.today, 40) ? `today is ${line(p.today, 40)}` : '',
   ]);
   lines.push(`Progress: ${numbers || 'no history yet'}`);
   const recent = list(p.recent).map((entry) => line(entry, 160)).filter(Boolean).slice(0, MAX_RECENT_SHOWN);
@@ -462,7 +490,10 @@ export function renderFreePlay(input) {
 
   if (key) {
     const confidence = isNum(key.confidence) ? ` (confidence ${clamp01(key.confidence).toFixed(2)} of 1)` : '';
-    lines.push(`Key guess: ${join([line(key.tonic, 4), line(key.mode, 12)], ' ')}${confidence}`);
+    const name = join([line(key.tonic, 4), line(key.mode, 12)], ' ');
+    // A weak lead over the next key is not a finding the teacher should repeat as fact.
+    if (isNum(key.confidence) && key.confidence < 0.3) lines.push(`Key guess: unclear, weak lean toward ${name}${confidence}`);
+    else lines.push(`Key guess: ${name}${confidence}`);
   } else {
     lines.push('Key guess: none (too few notes or unclear)');
   }

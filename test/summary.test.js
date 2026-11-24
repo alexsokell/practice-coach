@@ -226,7 +226,7 @@ describe('renderAttempt', () => {
       'Exercise: "C major scale, right hand" (right hand, 15 steps)',
       'Try 3 | tempo mode, metronome at 72 bpm',
       'Result: completed | 13 of 15 steps clean (87%) | wrong notes 2 | missed notes 1 | extra notes 1 (before the first step or after the last)',
-      'Timing against the click: mean 34 ms late | spread (sd) 41 ms | drift +2.8 ms per beat (falling further behind)',
+      'Timing against the click: mean 34 ms late | spread (sd) 41 ms | drift +2.8 ms per beat (no clear trend)',
       'Loudness (MIDI velocity 1-127): mean 70 | spread (sd) 6 | softest 58 | loudest 81',
       'Trouble spots (worst first):',
       '- step 13, E4 (finger 3): missed, not played in time; played F4 instead',
@@ -319,7 +319,7 @@ describe('renderAttempt', () => {
       'Exercise: "C, F and G chords" (right hand, 4 steps)',
       'Try 1 | tempo mode, metronome at 60 bpm',
       'Result: completed | 2 of 4 steps clean (50%) | wrong notes 0 | missed notes 4 | extra notes 0',
-      'Timing against the click: mean 0 ms (on the click) | spread (sd) 20 ms | drift -0.4 ms per beat (steady)',
+      'Timing against the click: mean 0 ms (on the click) | spread (sd) 20 ms | drift -0.4 ms per beat (too few notes to tell a trend)',
       'Loudness (MIDI velocity 1-127): mean 55 | spread (sd) 4 | softest 50 | loudest 62',
       'Trouble spots (worst first):',
       '- step 3, G = [B3 D4 G4] (fingers 1 2 5): missed, not played in time',
@@ -350,7 +350,7 @@ describe('renderAttempt', () => {
       result: { ...TEMPO_RESULT, timing: { ...TEMPO_RESULT.timing, driftMsPerBeat, meanOffsetMs } },
     }).split('\n')[4];
     assert.equal(drifting(-3.3, -40.2), 'Timing against the click: mean 40 ms early | spread (sd) 41 ms | drift -3.3 ms per beat (getting further ahead)');
-    assert.equal(drifting(0, 0), 'Timing against the click: mean 0 ms (on the click) | spread (sd) 41 ms | drift 0 ms per beat (steady)');
+    assert.equal(drifting(0, 0), 'Timing against the click: mean 0 ms (on the click) | spread (sd) 41 ms | drift 0 ms per beat (no clear trend)');
     assert.equal(drifting(12, 90), 'Timing against the click: mean 90 ms late | spread (sd) 41 ms | drift +12 ms per beat (falling further behind)');
   });
 
@@ -854,12 +854,12 @@ describe('tracker results rendered for the starter exercises', () => {
       'Exercise: "C major scale, right hand" (right hand, 15 steps)',
       'Try 2 | wait mode, no metronome, suggested tempo 60 bpm',
       'Result: completed | 14 of 15 steps clean (93%) | wrong notes 2',
-      'Timing (estimated from the gaps between notes): about 59 bpm | evenness 67% (100% = equal gaps) | 1 hesitation | took 16.1 s',
+      'Timing (estimated from the gaps between notes): about 59 bpm | evenness 81% (100% = equal gaps) | 1 hesitation | took 16.1 s',
       'Loudness (MIDI velocity 1-127): mean 69 | spread (sd) 7 | softest 58 | loudest 81',
       'Trouble spots (worst first):',
       '- step 4, F4 (finger 1): wrong notes, pressed E4, G4 before the right key',
       '- step 9, B4 (finger 4): hesitation, 2.4 s gap before it (2.3x the usual)',
-      'Change from the previous try: clean 87% -> 93% | wrong notes 3 -> 2 | pace 52 -> 59 bpm | evenness 70% -> 67% | hesitations 1 -> 1',
+      'Change from the previous try: clean 87% -> 93% | wrong notes 3 -> 2 | pace 52 -> 59 bpm | evenness 84% -> 81% | hesitations 1 -> 1',
     ].join('\n'));
     assertWellFormed(text, 'attempt');
   });

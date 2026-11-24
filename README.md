@@ -22,8 +22,8 @@ Early prototype, built in public.
   trouble spot, switch hands, or move you on. It can read its replies aloud so you can keep your hands on the keys.
 - **Free play**: play anything and see the chord, key and tempo it hears. The coach can comment on that too.
 - **Real exercises with real fingering**: scales, arpeggios, five-finger patterns, chord progressions and
-  short public-domain tunes, shown as notation with finger numbers. Fingerings come from a verified table,
-  never from the AI's guess.
+  short public-domain tunes, shown as notation with finger numbers. For scales, arpeggios and chords the
+  fingering comes from a standard table in the code, not from the AI.
 
 ## Quick start
 
@@ -185,7 +185,11 @@ from packet to coach reply is exercised without hardware.
   printed scale manual, so a teacher's eye on them is welcome.
 - **Notation is simplified.** No key signatures (accidentals are written on the notes), no beams or ties, one
   voice per hand. A two-octave scale in the left hand runs into a lot of ledger lines.
-- **Tunes written by the AI can contain wrong notes.** Generated scales, arpeggios and chords cannot, because code builds them.
+- **Tunes written by the AI can contain wrong notes or odd fingerings.** When the coach writes a tune note by
+  note, its notes and finger numbers are the model's own. Generated scales, arpeggios and chords cannot be
+  wrong that way, because code builds them.
+- **A layered piano voice counts as one key press.** If your piano sends each key twice (piano plus strings),
+  the copy is ignored. Split keyboards and auto-accompaniment are not handled: turn them off while practicing.
 - **It costs money per coach reply** when you use a real API key. See the numbers above.
 - **One learner, one browser.** No accounts, no sync between devices.
 

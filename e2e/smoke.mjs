@@ -244,19 +244,39 @@ try {
   check('coach comments on the attempt', (await coachBubbles(page)) > before);
   await shot(page, '03-after-attempt');
 
-  // A clean second try.
+  console.log('looping without a pause');
   await page.waitForFunction(() => window.practiceCoach.attemptStatus === 'ready', null, { timeout: 5000 });
   exercise = await page.evaluate(() => window.practiceCoach.exercise);
+  const loopSteps = exercise.steps.filter((step) => step.notes.length);
+  const finishedBefore = await page.evaluate(() => window.practiceCoach.finishedCount);
   before = await coachBubbles(page);
-  for (const step of exercise.steps) {
-    if (step.notes.length) await playStep(page, step);
-  }
-  await page.waitForSelector('#ex-result:not([hidden])');
+  for (const step of loopSteps) await playStep(page, step);
   check('clean run scores 100%', /100% clean/.test(await page.textContent('#ex-result')), await page.textContent('#ex-result'));
+  // Second round straight on: its first note is the last note of round one, so it starts at step 2.
+  for (const step of loopSteps.slice(1)) await playStep(page, step);
+  await page.waitForFunction((n) => window.practiceCoach.finishedCount >= n + 2, finishedBefore, { timeout: 8000 });
+  const looped = await page.evaluate(() => window.practiceCoach.lastResult);
+  check('a second round played straight on is its own clean try', looped.totals.accuracy === 1 && looped.totals.wrongNotes === 0, JSON.stringify(looped.totals));
+  // Noodling after the end must not be charged to the next try.
+  for (const midi of [70, 73, 75]) await playStep(page, { notes: [midi] }, { holdMs: 90, gapMs: 60 });
+  check('stray notes after a finished try do not start a new one', (await page.evaluate(() => window.practiceCoach.attemptStatus)) === 'finished');
   await waitForCoachReply(page, before);
+  const requestsSoFar = await page.evaluate(() => performance.getEntriesByType('resource').filter((entry) => entry.name.endsWith('/api/coach')).length);
+  check('quick repeat tries are folded into one coach request', requestsSoFar <= 3, `requests: ${requestsSoFar}`);
+
+  console.log('starting over after a slip');
+  await page.waitForFunction(() => window.practiceCoach.attemptStatus === 'ready' && window.practiceCoach.coachIdle, null, { timeout: 12000 });
+  exercise = await page.evaluate(() => window.practiceCoach.exercise);
+  const again = exercise.steps.filter((step) => step.notes.length);
+  for (const step of again.slice(0, 3)) await playStep(page, step);
+  await playStep(page, { notes: [again[3].notes[0] + 6] }); // a slip
+  for (const step of again) await playStep(page, step); // then from the top
+  await page.waitForFunction((n) => window.practiceCoach.lastResult && window.practiceCoach.attemptStatus === 'finished', null, { timeout: 8000 });
+  const restarted = await page.evaluate(() => window.practiceCoach.lastResult);
+  check('starting again from the top after a slip is a fresh clean try', restarted.totals.accuracy === 1 && restarted.totals.wrongNotes === 0, JSON.stringify(restarted.totals));
 
   console.log('metronome mode');
-  await page.waitForFunction(() => window.practiceCoach.attemptStatus === 'ready', null, { timeout: 5000 });
+  await page.waitForFunction(() => window.practiceCoach.attemptStatus === 'ready' && window.practiceCoach.coachIdle, null, { timeout: 15000 });
   await page.click('#mode-tempo');
   await page.click('#bpm-up');
   exercise = await page.evaluate(() => window.practiceCoach.exercise);
