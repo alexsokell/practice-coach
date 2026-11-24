@@ -533,7 +533,10 @@ test('the exact request: model, effort, schema, cache breakpoints, nothing forbi
     { role: 'user', content: [{ type: 'text', text: messages[2].content, cache_control: { type: 'ephemeral' } }] },
   ]);
   assert.equal(params.messages.at(-1).role, 'user', 'no assistant prefill');
-  assert.equal(options.signal, controller.signal, 'the abort signal reaches the SDK call');
+  // The SDK gets a signal of its own, linked to the request's signal while the turn runs (it
+  // also carries the idle watchdog). The abort tests below check that a disconnect reaches it.
+  assert.ok(options.signal instanceof AbortSignal);
+  assert.equal(options.signal.aborted, false);
 });
 
 test('two requests with the same transcript send byte-identical prefixes (cacheable)', async () => {
@@ -853,7 +856,7 @@ test('a rejected exercise triggers exactly one corrective request, and only its 
   const buildErrors = buildExercise(BAD_SPEC).errors;
   assert.ok(buildErrors.length >= 1);
   for (const error of buildErrors) assert.ok(rejection.content.includes(error), `the rejection lists: ${error}`);
-  assert.equal(second.options.signal, first.options.signal);
+  assert.ok(second.options.signal instanceof AbortSignal);
 });
 
 test('a second rejected exercise falls back to action none, with no third request', async () => {
@@ -862,7 +865,8 @@ test('a second rejected exercise falls back to action none, with no third reques
   const result = await turn(coach, { exercise: SCALE });
   assert.equal(result.error, undefined);
   assert.equal(client.calls.length, 2);
-  assert.deepEqual(result.action, { type: 'none' });
+  // dropped tells the browser that the change announced in "say" did not happen.
+  assert.deepEqual(result.action, { type: 'none', dropped: true });
   assert.equal(result.said, 'Try this new pattern.');
   assert.deepEqual(JSON.parse(result.done.assistant).action, { type: 'none' }, 'the transcript records what really happened');
 });
@@ -882,7 +886,7 @@ test('the corrective request may answer with another action type, or fail', asyn
     const failing = liveCoach([() => apiReply(bad), () => failure]);
     const result = await turn(failing.coach);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.action, { type: 'none' });
+    assert.deepEqual(result.action, { type: 'none', dropped: true });
     assert.equal(result.names.at(-1), 'done');
     assert.equal(failing.client.calls.length, 2);
   }
@@ -899,20 +903,66 @@ test('drill: 1-based inclusive steps of the current exercise', async () => {
   assert.deepEqual(JSON.parse(result.done.assistant).action, { type: 'drill', from_step: 3, to_step: 6 });
 });
 
-test('drill without a current exercise or with a bad range: action none, no extra request', async () => {
+test('drill without a current exercise or with a bad range: one corrective request, then the learner is told', async () => {
   const attempt = async (action, exercise) => {
     const { coach, client } = liveCoach(() => apiReply(replyJson('Loop it.', action)));
     const result = await turn(coach, { exercise });
-    assert.equal(client.calls.length, 1);
+    // The model is told what was wrong once; here it repeats the mistake.
+    assert.equal(client.calls.length, 2);
+    const rejection = client.calls[1].params.messages.at(-1).content;
+    assert.ok(rejection.startsWith('[event: exercise_rejected]'));
+    assert.match(rejection, /drill/);
     assert.equal(result.error, undefined);
     assert.equal(result.said, 'Loop it.');
     assert.deepEqual(JSON.parse(result.done.assistant).action, { type: 'none' });
     return result.action;
   };
-  assert.deepEqual(await attempt({ type: 'drill', from_step: 3, to_step: 6 }, null), { type: 'none' });
-  assert.deepEqual(await attempt({ type: 'drill', from_step: 0, to_step: 6 }, SCALE), { type: 'none' });
-  assert.deepEqual(await attempt({ type: 'drill', from_step: 10, to_step: 99 }, SCALE), { type: 'none' });
-  assert.deepEqual(await attempt({ type: 'drill', from_step: 6, to_step: 3 }, SCALE), { type: 'none' });
+  assert.deepEqual(await attempt({ type: 'drill', from_step: 3, to_step: 6 }, null), { type: 'none', dropped: true });
+  assert.deepEqual(await attempt({ type: 'drill', from_step: 0, to_step: 6 }, SCALE), { type: 'none', dropped: true });
+  assert.deepEqual(await attempt({ type: 'drill', from_step: 10, to_step: 99 }, SCALE), { type: 'none', dropped: true });
+  assert.deepEqual(await attempt({ type: 'drill', from_step: 6, to_step: 3 }, SCALE), { type: 'none', dropped: true });
+
+  // A corrected range on the second go is used.
+  const fixed = liveCoach([
+    () => apiReply(replyJson('Loop it.', { type: 'drill', from_step: 10, to_step: 99 })),
+    () => apiReply(replyJson('Loop it.', { type: 'drill', from_step: 10, to_step: 12 })),
+  ]);
+  const result = await turn(fixed.coach, { exercise: SCALE });
+  assert.equal(result.action.type, 'drill');
+  assert.equal(result.action.exercise.steps.length, 3);
+});
+
+test('a reply stream that goes silent is given up as a network error', async () => {
+  let aborted = false;
+  const client = {
+    beta: {
+      messages: {
+        stream(params, options) {
+          options.signal.addEventListener('abort', () => {
+            aborted = true;
+          });
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'message_start', message: {} };
+              // Then nothing: wait until the watchdog aborts the request.
+              await new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+            },
+            finalMessage: async () => {
+              throw new Error('never finished');
+            },
+          };
+        },
+      },
+    },
+    messages: { stream() { throw new Error('unused'); } },
+  };
+  const coach = createCoach({ client, idleMs: 40 });
+  const events = [];
+  for await (const event of coach({ messages: [USER_START] })) events.push(event);
+  assert.equal(aborted, true, 'the upstream request is cancelled');
+  assert.deepEqual(events.map((event) => event.event), ['error']);
+  assert.equal(events[0].data.code, 'network');
+  assert.equal(events[0].data.retryable, true);
 });
 
 test('set_tempo with and without a current exercise', async () => {
@@ -928,7 +978,7 @@ test('set_tempo with and without a current exercise', async () => {
   assert.deepEqual(JSON.parse(withExercise.done.assistant).action, { type: 'set_tempo', bpm: 68, mode: 'tempo' });
 
   const without = await turn(liveCoach(() => apiReply(text)).coach, { exercise: null });
-  assert.deepEqual(without.action, { type: 'none' });
+  assert.deepEqual(without.action, { type: 'none', dropped: true });
   assert.equal(without.names.at(-1), 'done');
 });
 
@@ -1766,16 +1816,19 @@ test('mock coach: attempt feedback follows the accuracy', async () => {
   assert.ok(vague.said.length > 10);
 });
 
-test('mock coach: two clean attempts in a row raise the tempo, later move on', async () => {
+test('mock coach: two clean attempts in a row bring in the metronome, then raise the tempo, then move on', async () => {
   const cleanTurn = (n) => ({ role: 'user', content: attemptText([`attempt ${n}`, 'result: completed, accuracy 100% (15/15 clean)']) });
   const history = [USER_START, { role: 'assistant', content: replyJson('Welcome.') }, cleanTurn(1), { role: 'assistant', content: replyJson('Clean. Once more.') }];
 
-  const raised = await mockTurn({ messages: [...history, cleanTurn(2)], exercise: SCALE });
-  assert.equal(raised.action.type, 'set_tempo');
-  assert.equal(raised.action.bpm, SCALE.bpm + 8);
-  assert.equal(raised.action.mode, SCALE.mode);
-  assert.equal(raised.action.exercise.bpm, SCALE.bpm + 8);
-  assert.equal(raised.action.exercise.id, SCALE.id);
+  // In wait mode nothing sets the pace, so the next step is the metronome, not a higher number.
+  const withClick = await mockTurn({ messages: [...history, cleanTurn(2)], exercise: SCALE });
+  assert.equal(SCALE.mode, 'wait');
+  assert.equal(withClick.action.type, 'set_tempo');
+  assert.equal(withClick.action.mode, 'tempo');
+  assert.equal(withClick.action.bpm, SCALE.bpm);
+  assert.equal(withClick.action.exercise.mode, 'tempo');
+  assert.equal(withClick.action.exercise.id, SCALE.id);
+  assert.match(withClick.said, /metronome/);
 
   // A chat in between does not break the streak; an action that changed the exercise does.
   const withChat = [...history, { role: 'user', content: '[event: chat]\n"is this right?"' }, { role: 'assistant', content: replyJson('Offline.') }, cleanTurn(2)];
@@ -1786,16 +1839,17 @@ test('mock coach: two clean attempts in a row raise the tempo, later move on', a
   const sloppy = [...history.slice(0, 2), { role: 'user', content: attemptText(['accuracy 60%']) }, { role: 'assistant', content: replyJson('Slower.') }, cleanTurn(2)];
   assert.deepEqual((await mockTurn({ messages: sloppy, exercise: SCALE })).action, { type: 'none' });
 
-  // Already two raises above the starting tempo: time for the next starter exercise.
-  const fast = resolveAction({ type: 'set_tempo', bpm: SCALE.bpm + 16, mode: 'tempo' }, SCALE).action.exercise;
+  // In tempo mode two clean tries raise the tempo by 8 and keep tempo mode.
+  const inTempo = resolveAction({ type: 'set_tempo', bpm: SCALE.bpm, mode: 'tempo' }, SCALE).action.exercise;
+  const raised = await mockTurn({ messages: [...history, cleanTurn(2)], exercise: inTempo });
+  assert.deepEqual([raised.action.type, raised.action.mode, raised.action.bpm], ['set_tempo', 'tempo', SCALE.bpm + 8]);
+
+  // Already one raise above the starting tempo: time for the next starter exercise.
+  const fast = resolveAction({ type: 'set_tempo', bpm: SCALE.bpm + 8, mode: 'tempo' }, SCALE).action.exercise;
   const moved = await mockTurn({ messages: [...history, cleanTurn(2)], exercise: fast });
   assert.equal(moved.action.type, 'new_exercise');
   const index = STARTER_EXERCISES.indexOf(SCALE_SPEC);
   assert.deepEqual(moved.action.exercise, built(STARTER_EXERCISES[(index + 1) % STARTER_EXERCISES.length]));
-  // In tempo mode the raise keeps tempo mode.
-  const inTempo = resolveAction({ type: 'set_tempo', bpm: SCALE.bpm, mode: 'tempo' }, SCALE).action.exercise;
-  const kept = await mockTurn({ messages: [...history, cleanTurn(2)], exercise: inTempo });
-  assert.deepEqual([kept.action.type, kept.action.mode, kept.action.bpm], ['set_tempo', 'tempo', SCALE.bpm + 8]);
 });
 
 test('mock coach: two clean tries inside a drill go back to the full exercise', async () => {

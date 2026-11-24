@@ -49,12 +49,14 @@ Create a key at [platform.claude.com](https://platform.claude.com) and paste it 
 
 Rough estimate with the default model (`claude-opus-5-5`, $4 per million input tokens and $20 per million
 output tokens): about 1 to 2 cents per coach reply, a few cents for the first reply of a session. A 30-minute
-session with 40 replies comes to roughly 50 to 80 cents. These numbers are calculated from token prices, not
-measured on a bill yet. Set `COACH_MODEL=claude-haiku-5-5` in `.env` to make it about 40 times cheaper, with
+session with 40 to 100 replies comes to roughly 50 cents to 2 dollars. These numbers are calculated from token
+prices, not measured on a bill yet. Set `COACH_MODEL=claude-haiku-5-5` in `.env` to make it about 40 times cheaper, with
 simpler feedback.
 
-Two guards against surprises: Settings shows a running cost estimate for the session, and the server refuses
-more than 20 coach requests a minute.
+Three guards against surprises: the app reports your tries to the coach at most once every 8 seconds (quick
+repeats are folded into one report), Settings shows a running cost estimate for the session, and the server
+refuses more than 20 coach requests a minute. Steady practice can still add up to 100 or more replies in half
+an hour, so check the estimate in Settings after your first session.
 
 ## Connecting your piano
 

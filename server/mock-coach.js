@@ -13,7 +13,7 @@ export const MOCK_MODEL = 'offline-coach';
 
 const OFFLINE_NOTICE = 'This is the offline practice coach: simple built-in feedback, no AI. Add an API key to .env for the real teacher.';
 const TEMPO_STEP = 8; // bpm added after two clean tries
-const TEMPO_RAISES_BEFORE_MOVING_ON = 2;
+const TEMPO_RAISES_BEFORE_MOVING_ON = 1; // metronome tempo raises before the next exercise
 const CLEAN_PERCENT = 90;
 const STRUGGLE_PERCENT = 70;
 
@@ -220,9 +220,14 @@ export function mockReply({ messages, exercise = null }) {
           const startBpm = starters()[starterIndexOf(exercise)]?.exercise.bpm ?? exercise.bpm;
           const raised = exercise.bpm + TEMPO_STEP;
           const next = nextStarter(exercise);
-          if (raised <= 200 && exercise.bpm < startBpm + TEMPO_STEP * TEMPO_RAISES_BEFORE_MOVING_ON) {
+          if (exercise.mode !== 'tempo') {
+            // Nothing sets the pace in wait mode, so "faster" would mean nothing there: bring in the metronome.
+            const bpm = Math.min(exercise.bpm, startBpm);
+            say = `${percent} percent clean, twice in a row. Now the same exercise with the metronome at ${bpm}. Press Start, listen to the count-in, then play with the click.`;
+            action = { type: 'set_tempo', bpm, mode: 'tempo' };
+          } else if (raised <= 200 && exercise.bpm < startBpm + TEMPO_STEP * TEMPO_RAISES_BEFORE_MOVING_ON) {
             say = `${percent} percent clean, twice in a row. Same exercise a little faster now, at ${raised} beats per minute.`;
-            action = { type: 'set_tempo', bpm: raised, mode: exercise.mode === 'tempo' ? 'tempo' : 'wait' };
+            action = { type: 'set_tempo', bpm: raised, mode: 'tempo' };
           } else if (next) {
             say = `${percent} percent clean again. You have this one, so here is something new: ${next.exercise.title}.`;
             action = { type: 'new_exercise', exercise: next.spec };
@@ -252,7 +257,7 @@ export function mockReply({ messages, exercise = null }) {
       say = 'I heard your free playing. The offline coach cannot say much about it, so keep exploring, or go back to the exercise when you are ready.';
       break;
     case 'chat':
-      say = 'I am the offline coach, so I cannot really answer questions. Use Next exercise to move on, or add an API key to .env to talk with the real teacher.';
+      say = 'I am the offline coach, so I cannot answer questions. To change exercise, open All exercises and pick one. Add an API key to .env to talk with the real teacher.';
       break;
     case 'hint': {
       const stepNumber = readFirstStepNumber(body);

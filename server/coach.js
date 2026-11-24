@@ -24,6 +24,17 @@ export const MAX_TOKENS = 16000;
 export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 const USAGE_COUNTERS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+/**
+ * How long the reply stream may stay silent before the turn is given up. The SDK's own timeout
+ * only covers the wait for the response headers: without this, a connection that goes quiet
+ * mid-reply (Wi-Fi drop, laptop sleep) would freeze the coach for minutes. Higher effort levels
+ * can think for a long time without sending anything, so they get more patience.
+ */
+const STREAM_IDLE_MS = { low: 60_000, medium: 90_000 };
+const STREAM_IDLE_DEFAULT_MS = 240_000;
+
+/** The reply stream went silent for too long. */
+class StreamStalledError extends Error {}
 const MAX_REJECTION_ERRORS = 12;
 
 /**
@@ -43,6 +54,9 @@ class MissingCredentialsError extends Error {}
  * @returns {{code: string, message: string, retryable: boolean}}
  */
 export function mapError(err) {
+  if (err instanceof StreamStalledError) {
+    return { code: 'network', message: 'The Claude API stopped answering in the middle of the reply. Check your internet connection and try again.', retryable: true };
+  }
   if (err instanceof MissingCredentialsError) {
     return {
       code: 'auth',
@@ -159,7 +173,7 @@ function rejectionTurn(errors) {
   if (errors.length > MAX_REJECTION_ERRORS) listed.push(`- (and ${errors.length - MAX_REJECTION_ERRORS} more)`);
   return [
     '[event: exercise_rejected]',
-    'The app could not build the exercise in your last reply. Problems:',
+    'The app could not apply the action in your last reply. Problems:',
     ...listed,
     'Send the same JSON reply again with a corrected "action". Keep "say" exactly as it was.',
   ].join('\n');
@@ -181,6 +195,7 @@ export function createCoach({
   model = DEFAULT_MODEL,
   effort = DEFAULT_EFFORT,
   maxTokens = MAX_TOKENS,
+  idleMs = STREAM_IDLE_MS[effort] ?? STREAM_IDLE_DEFAULT_MS,
   now = () => performance.now(),
   warn = (message) => console.warn(message),
 } = {}) {
@@ -240,11 +255,27 @@ export function createCoach({
       const extractor = new SayExtractor();
       let said = '';
       let sawEvent = false;
+      // Idle watchdog: abort the upstream request when nothing has arrived for idleMs.
+      const guard = new AbortController();
+      const onAbort = () => guard.abort();
+      if (signal?.aborted) guard.abort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      let stalled = false;
+      let idleTimer = null;
+      const touch = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          stalled = true;
+          guard.abort();
+        }, idleMs);
+      };
+      touch();
       try {
         const api = rung.fallbacks ? client.beta.messages : client.messages;
-        const stream = api.stream(buildParams(apiMessages, rung), { signal });
+        const stream = api.stream(buildParams(apiMessages, rung), { signal: guard.signal });
         for await (const event of stream) {
           sawEvent = true;
+          touch();
           if (event?.type === 'content_block_start' && event.content_block?.type === 'fallback') {
             // A fallback model took over inside the same response: its text starts the reply over.
             extractor.reset();
@@ -266,6 +297,7 @@ export function createCoach({
         return { message, said };
       } catch (err) {
         if (signal?.aborted) throw err;
+        if (stalled) throw new StreamStalledError('The response stream from the Claude API went silent.');
         if (!(err instanceof Anthropic.APIError)) {
           // Not an answer from the API. Once events were flowing, the SDK raises a bare error when
           // the stream breaks off or ends before the message is complete: that is a network fault.
@@ -281,6 +313,9 @@ export function createCoach({
         // A 400 comes before any content, so there should be nothing to take back. Be safe anyway.
         if (said && !silent) yield { event: 'reset', data: {} };
         rung = next;
+      } finally {
+        clearTimeout(idleTimer);
+        signal?.removeEventListener('abort', onAbort);
       }
     }
   }
@@ -348,16 +383,20 @@ export function createCoach({
 
       const usageBox = { usage: message?.usage ?? null };
       let resolved = resolveAction(reply.action, exercise);
-      if (resolved.errors) {
-        // The exercise did not build: one corrective request, and only its action is used.
+      const problems = resolved.errors ?? (resolved.problem ? [resolved.problem] : null);
+      if (problems) {
+        // The action cannot be applied (an exercise that does not build, a drill outside the
+        // exercise, a tempo change with nothing on screen): one corrective request, and only its
+        // action is used. If that fails too the learner is told, because "say" has already
+        // announced a change that will not happen.
         let corrected = null;
         try {
-          corrected = yield* correctAction(apiMessages, reply, resolved.errors, exercise, signal, usageBox);
+          corrected = yield* correctAction(apiMessages, reply, problems, exercise, signal, usageBox);
         } catch (err) {
           if (signal?.aborted) return;
-          warnOnce('correction', `[coach] The follow-up request for a corrected exercise failed: ${err?.message}`);
+          warnOnce('correction', `[coach] The follow-up request for a corrected action failed: ${err?.message}`);
         }
-        resolved = corrected ?? { action: { type: 'none' }, spec: { type: 'none' } };
+        resolved = corrected ?? { action: { type: 'none', dropped: true }, spec: { type: 'none' } };
       }
 
       yield { event: 'action', data: { action: resolved.action } };

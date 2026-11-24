@@ -937,7 +937,11 @@ function sessionStartText() {
 
 /** Apply what the coach decided. Returns a short label for the chat log. */
 function applyCoachAction(action, event) {
-  if (!action || action.type === 'none') return null;
+  if (!action) return null;
+  if (action.type === 'none') {
+    // The coach announced a change the app could not carry out: say so instead of leaving the learner guessing.
+    return action.dropped ? 'The coach tried to change the exercise, but the app could not do it. Carry on with what is on screen.' : null;
+  }
   // A drill, tempo change or "back to full" refers to the exercise the report was about. If the
   // learner has loaded something else, or changed its tempo or mode by hand since, it no longer applies.
   const relative = action.type === 'drill' || action.type === 'set_tempo' || action.type === 'back_to_full';
@@ -1010,7 +1014,8 @@ function usageText() {
   const usage = state.session?.usage;
   if (!usage || !usage.replies) return 'No coach replies yet in this session.';
   if (health?.mode === 'mock') return `${usage.replies} replies from the offline coach. No API cost.`;
-  const price = PRICES[usage.model];
+  // After a rare fallback to another model the reply names that model: price by the configured one.
+  const price = PRICES[usage.model] ?? PRICES[health?.model];
   const tokens = `${usage.replies} coach replies. Tokens: ${usage.input + usage.cacheRead + usage.cacheWrite} in, ${usage.output} out.`;
   if (!price) return tokens;
   const cost =
