@@ -306,7 +306,8 @@ export function renderStaff(container, exercise, { showNames = true, showFingers
   const below = Math.max(0, CLEFS[lower].bottom - range[lower].min) * HALF;
   const fingerRow = 11;
   const labelRow = hasLabels ? 15 : 0;
-  const top = Math.max(grand || upper === 'treble' ? 30 : 16, 8 + labelRow + fingersAbove * fingerRow + 8 + above);
+  // 16 units of clearance keep finger numbers off the highest note and its accidental.
+  const top = Math.max(grand || upper === 'treble' ? 30 : 16, 8 + labelRow + fingersAbove * fingerRow + 16 + above);
   // In a grand staff, notes between the staves need room too.
   let gap = 58;
   if (grand) {
@@ -374,7 +375,7 @@ export function renderStaff(container, exercise, { showNames = true, showFingers
     if (showFingers) {
       const rightHand = column.notes.filter((n) => n.hand === 'R' && n.finger).sort((a, b) => b.d - a.d);
       rightHand.forEach((n, row) => {
-        const y = top - above - 8 - (rightHand.length - 1 - row) * fingerRow;
+        const y = top - above - 16 - (rightHand.length - 1 - row) * fingerRow;
         text(group, cx, y, String(n.finger), 'staff-finger');
       });
       const leftHand = column.notes.filter((n) => n.hand === 'L' && n.finger).sort((a, b) => b.d - a.d);

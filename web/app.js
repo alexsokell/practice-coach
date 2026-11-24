@@ -66,6 +66,7 @@ let lastAutoHintAt = 0;
 let lastFreePlayCoachAt = 0;
 let lastNoteAt = 0;
 let lastNote = null;
+let lastResult = null; // the most recent finished AttemptResult
 let virtualOctave = 0;
 let health = null;
 const previousResults = new Map(); // exercise id -> last AttemptResult
@@ -111,7 +112,7 @@ function isUsableExercise(candidate) {
 }
 
 /** Put an exercise on screen and get ready for a first attempt. */
-function loadExercise(next, { parent = null } = {}) {
+function loadExercise(next, { parent = null, keepResult = false } = {}) {
   if (!isUsableExercise(next)) return false;
   stopDemo();
   exercise = next;
@@ -124,14 +125,15 @@ function loadExercise(next, { parent = null } = {}) {
   els.title.textContent = next.title;
   els.goal.textContent = next.goal;
   els.parent.hidden = !parent;
-  els.result.hidden = true;
+  // After a coach decision the last result stays on screen until the learner plays again.
+  if (!keepResult) els.result.hidden = true;
   // Show the exercise view first: the notation needs a visible container to size itself.
   if (view !== 'exercise') showView('exercise');
   drawStaff();
   const notes = next.steps.flatMap((step) => step.notes);
   if (notes.length) keyboard.fitTo(notes);
   updateControls();
-  newAttempt();
+  newAttempt({ keepResult });
   return true;
 }
 
@@ -355,6 +357,7 @@ function finishAttempt() {
   clearTimeout(finishTimer);
   stopMetronome();
   const result = tracker.result();
+  lastResult = result;
   attempt.status = 'finished';
   attempt.finishedAt = performance.now();
   refreshProgress();
@@ -368,7 +371,7 @@ function finishAttempt() {
   if (pendingSwitch) {
     // The coach already moved on while this attempt was under way.
     const { exercise: nextExercise, parent } = pendingSwitch;
-    finishTimer = setTimeout(() => loadExercise(nextExercise, { parent }), 1200);
+    finishTimer = setTimeout(() => loadExercise(nextExercise, { parent, keepResult: true }), 1200);
     return;
   }
 
@@ -664,8 +667,14 @@ function onStatus(status) {
   pill.className = 'pill';
   switch (status.state) {
     case 'connected':
-      pill.classList.add('pill-on');
-      pill.textContent = status.deviceName || (status.transport === 'ble' ? 'Bluetooth piano' : 'MIDI device');
+      if (status.transport === 'webmidi' && !status.deviceName) {
+        // MIDI access granted, but nothing is plugged in yet.
+        pill.classList.add('pill-busy');
+        pill.textContent = 'Waiting for a MIDI device';
+      } else {
+        pill.classList.add('pill-on');
+        pill.textContent = status.deviceName || (status.transport === 'ble' ? 'Bluetooth piano' : 'MIDI device');
+      }
       break;
     case 'connecting':
       pill.classList.add('pill-busy');
@@ -713,7 +722,13 @@ async function connect(kind) {
     if (kind === 'ble') await input.connectBluetooth();
     else if (kind === 'ble-all') await input.connectBluetooth({ acceptAll: true });
     else await input.connectWebMidi();
-    if (input.status.state === 'connected') $('dlg-connect').close();
+    const status = input.status;
+    if (status.state !== 'connected') return;
+    if (status.transport === 'webmidi' && !status.deviceName) {
+      showConnectError(status.message || 'No MIDI device found yet. Plug one in and it will be picked up.');
+      return;
+    }
+    $('dlg-connect').close();
   } catch (err) {
     // Closing the browser's device chooser is not an error worth showing.
     if (err?.name === 'NotFoundError' && /cancel/i.test(err.message ?? '')) return;
@@ -771,7 +786,7 @@ function applyCoachAction(action) {
     els.bannerText.textContent = `Your coach has the next step ready: ${next.title}.`;
     els.banner.hidden = false;
   } else {
-    loadExercise(next, { parent });
+    loadExercise(next, { parent, keepResult: true });
   }
   return label;
 }
@@ -1160,6 +1175,9 @@ window.practiceCoach = {
   },
   get result() {
     return tracker?.result() ?? null;
+  },
+  get lastResult() {
+    return lastResult;
   },
   get connection() {
     return input.status;

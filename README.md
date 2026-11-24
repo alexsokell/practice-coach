@@ -56,7 +56,44 @@ requests a minute as a guard against runaway spending.
 
 ## Connecting your piano
 
-CONNECTING_PLACEHOLDER
+### Which browser
+
+| Setup | Bluetooth MIDI | USB MIDI |
+| --- | --- | --- |
+| Chrome or Edge on Windows 10/11, macOS, ChromeOS | Yes | Yes |
+| Chrome on Android 6 or newer | Yes | Yes |
+| Chrome on Linux | Only after enabling `chrome://flags/#enable-experimental-web-platform-features` | Yes |
+| Firefox (desktop, 108 or newer) | No | Yes, plug the piano in before you click Connect |
+| Safari, and every browser on iPhone and iPad | No | No |
+
+The page must be opened at `http://localhost` (or over https). Browsers refuse Bluetooth on plain
+`http://192.168...` addresses, which is why the simplest setup is a laptop next to the piano.
+
+### Steps
+
+1. Switch the piano on and turn on its **Bluetooth MIDI** function. On many pianos this is separate from Bluetooth audio.
+2. Make sure the piano is not already connected to a phone or tablet app.
+3. Turn Bluetooth on at the computer.
+4. In the app, click **Connect piano**, choose **Bluetooth piano**, and pick the piano in the browser's own list.
+5. Not in the list? Choose **My piano is not in the list**. The normal list only shows devices that announce the MIDI service.
+6. USB instead: plug the cable in, choose **USB cable or already paired**, and allow the browser's MIDI prompt.
+
+### If it does not work
+
+- **Piano not listed:** check that Bluetooth MIDI is on, disconnect the piano from other devices, move closer,
+  switch its Bluetooth off and on, then try "My piano is not in the list".
+- **"Does not offer Bluetooth MIDI":** the entry you picked is not the MIDI one (often the piano's audio entry).
+- **Connects but no notes, or connecting keeps failing:** remove the piano from the system Bluetooth settings,
+  restart its Bluetooth and connect again. On Windows, a piano that insists on pairing may need to be paired in
+  Windows settings first.
+- **Connection drops:** the app releases all keys and retries by itself six times with growing waits, then asks you to connect again.
+- **"Bluetooth is not available":** no adapter, Bluetooth is off, the browser lacks Bluetooth permission in the
+  system settings, or (Linux) the flag above is off.
+- **MIDI blocked:** allow "MIDI devices" for the site in the browser's site settings.
+- **Still stuck:** pair the piano in the system (macOS: Audio MIDI Setup, Bluetooth; Windows 11: Bluetooth settings)
+  and use the **USB cable or already paired** button. Chrome's `about://bluetooth-internals` page shows what the adapter sees.
+
+Settings has a **MIDI monitor** that lists the raw messages arriving from the piano.
 
 ## How it works
 

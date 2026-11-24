@@ -181,6 +181,8 @@ server.stdout.on('data', (chunk) => (serverLog += chunk));
 server.stderr.on('data', (chunk) => (serverLog += chunk));
 
 let browser;
+let page;
+const errors = [];
 try {
   const health = await waitForServer();
   console.log(`server up on ${base} (${health.mode} coach)`);
@@ -188,12 +190,12 @@ try {
 
   browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
-  const page = await context.newPage();
-  const errors = [];
+  page = await context.newPage();
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(msg.text());
   });
   page.on('pageerror', (err) => errors.push(String(err)));
+  page.on('requestfailed', (request) => errors.push(`request failed: ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`));
   await page.addInitScript(installFakePiano);
   await page.goto(base);
 
@@ -273,8 +275,9 @@ try {
   });
   await page.waitForSelector('#countin:not([hidden])', { timeout: 5000 });
   await shot(page, '04-count-in');
-  await page.waitForSelector('#ex-result:not([hidden])', { timeout: 60000 });
-  const tempoResult = await page.evaluate(() => window.practiceCoach.result);
+  await page.waitForFunction(() => window.practiceCoach.lastResult?.mode === 'tempo', null, { timeout: 60000 });
+  const tempoResult = await page.evaluate(() => window.practiceCoach.lastResult);
+  check('result chips stay visible after the coach replies', (await page.locator('#ex-result:not([hidden])').count()) === 1);
   check('metronome run completes', tempoResult.completed === true);
   check('all notes land inside the timing window', tempoResult.totals.accuracy === 1, JSON.stringify(tempoResult.totals));
   check(
@@ -359,6 +362,24 @@ try {
 } catch (err) {
   failures.push(`crashed: ${err?.stack ?? err}`);
   console.log(`  FAIL crashed: ${err?.stack ?? err}`);
+  try {
+    const state = await page.evaluate(() => ({
+      title: document.getElementById('ex-title').textContent,
+      status: document.getElementById('ex-status').textContent,
+      attempt: window.practiceCoach?.attemptStatus,
+      stepIndex: window.practiceCoach?.stepIndex,
+      stepStates: window.practiceCoach?.stepStates?.join(','),
+      mode: window.practiceCoach?.exercise?.mode,
+      bpm: window.practiceCoach?.exercise?.bpm,
+      totals: window.practiceCoach?.result?.totals,
+      connection: window.practiceCoach?.connection,
+      coachLog: [...document.querySelectorAll('#coach-log .msg')].slice(-4).map((el) => el.textContent),
+    }));
+    console.log(`app state at the failure:\n${JSON.stringify(state, null, 2)}`);
+    if (errors.length) console.log(`browser errors:\n${errors.join('\n')}`);
+  } catch {
+    // the page is gone: nothing more to report
+  }
 } finally {
   await browser?.close();
   server.kill();
