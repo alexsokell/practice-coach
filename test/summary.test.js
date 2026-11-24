@@ -815,34 +815,92 @@ describe('tracker results rendered for the starter exercises', () => {
     }
   });
 
-  test('the realistic wait-mode example: two wrong notes at the thumb crossing', () => {
-    const exercise = buildExercise(STARTER_EXERCISES.find((spec) => spec.title === 'C major scale, right hand')).exercise;
+  // The two examples below are the ones quoted in the README: real tracker runs, exact text.
+  const scale = () => buildExercise(STARTER_EXERCISES.find((spec) => spec.title === 'C major scale, right hand')).exercise;
+
+  /** Wait mode: script entries are [midi, ms since the previous key, velocity]. */
+  function waitRun(exercise, script) {
     const tracker = new AttemptTracker(exercise);
-    const gaps = [0, 1010, 960, 600, 1050, 990, 1010, 960, 2350, 990, 1010, 960, 1050, 990, 1010];
     let t = 1000;
-    exercise.steps.forEach((s, i) => {
-      if (i === 3) {
-        for (const [midi, wait] of [[64, 700], [67, 450]]) {
-          tracker.noteOn(midi, 70, (t += wait));
-          tracker.noteOff(midi, t + 100);
-        }
-      }
-      t += gaps[i];
-      tracker.noteOn(s.notes[0], 58 + ((i * 11) % 24), t);
-      tracker.noteOff(s.notes[0], t + 120);
+    for (const [midi, gap, velocity] of script) {
+      t += gap;
+      tracker.noteOn(midi, velocity, t);
+      tracker.noteOff(midi, t + 120);
+    }
+    return tracker.result();
+  }
+
+  test('the realistic wait-mode example: two wrong notes at the thumb crossing, one hesitation', () => {
+    const exercise = scale();
+    const notes = exercise.steps.map((s) => s.notes[0]);
+    // First try: slower, wrong keys before steps 4 and 13.
+    const first = [];
+    notes.forEach((midi, i) => {
+      if (i === 3) first.push([64, 900, 60], [67, 500, 62]);
+      if (i === 12) first.push([65, 700, 58]);
+      first.push([midi, i === 0 ? 0 : [1150, 1090, 1210, 1120][i % 4], 55 + ((i * 7) % 20)]);
     });
-    const text = renderAttempt({ exercise, result: tracker.result(), attemptNumber: 2, previous: null });
+    // Second try: E and G before the F of step 4 (the thumb crossing), a long wait before step 9.
+    const second = [];
+    notes.forEach((midi, i) => {
+      if (i === 3) second.push([64, 700, 71], [67, 450, 66]);
+      const gap = i === 0 ? 0 : i === 3 ? 600 : i === 8 ? 2350 : [1010, 960, 1050, 990][i % 4];
+      second.push([midi, gap, 58 + ((i * 11) % 24)]);
+    });
+    const previous = waitRun(exercise, first);
+    const text = renderAttempt({ exercise, result: waitRun(exercise, second), attemptNumber: 2, previous });
     assert.equal(text, [
       '[event: attempt]',
       'Exercise: "C major scale, right hand" (right hand, 15 steps)',
       'Try 2 | wait mode, no metronome, suggested tempo 60 bpm',
       'Result: completed | 14 of 15 steps clean (93%) | wrong notes 2',
-      'Timing (estimated from the gaps between notes): about 59 bpm | evenness 66% (100% = equal gaps) | 1 hesitation | took 16.1 s',
+      'Timing (estimated from the gaps between notes): about 59 bpm | evenness 67% (100% = equal gaps) | 1 hesitation | took 16.1 s',
       'Loudness (MIDI velocity 1-127): mean 69 | spread (sd) 7 | softest 58 | loudest 81',
       'Trouble spots (worst first):',
       '- step 4, F4 (finger 1): wrong notes, pressed E4, G4 before the right key',
       '- step 9, B4 (finger 4): hesitation, 2.4 s gap before it (2.3x the usual)',
+      'Change from the previous try: clean 87% -> 93% | wrong notes 3 -> 2 | pace 52 -> 59 bpm | evenness 70% -> 67% | hesitations 1 -> 1',
     ].join('\n'));
+    assertWellFormed(text, 'attempt');
+  });
+
+  test('the realistic tempo-mode example: dragging behind the click, one wrong key', () => {
+    const exercise = withTempo(scale(), { bpm: 72, mode: 'tempo' });
+    const notes = exercise.steps.map((s) => s.notes[0]);
+    const beatMs = 60000 / 72;
+    /** offsets: ms after the click for each step. skip: steps not played. wrongAt: a wrong key played instead. */
+    const tempoRun = (offsets, { skip = [], wrongAt = {} } = {}) => {
+      const tracker = new AttemptTracker(exercise);
+      tracker.start(20000);
+      notes.forEach((midi, i) => {
+        const t = 20000 + i * beatMs + offsets[i];
+        tracker.tick(t - 1);
+        if (wrongAt[i]) tracker.noteOn(wrongAt[i], 60, t);
+        if (!skip.includes(i)) {
+          tracker.noteOn(midi, 60 + ((i * 5) % 18), t);
+          tracker.noteOff(midi, t + 300);
+        }
+      });
+      tracker.tick(20000 + 16 * beatMs);
+      return tracker.result();
+    };
+    const previous = tempoRun([10, 35, 60, 95, 70, 110, 140, 150, 120, 160, 150, 190, 170, 180, 210], { skip: [7, 11] });
+    const result = tempoRun([-12, 8, 25, 140, 30, 22, 48, 61, 40, 55, 72, 66, 58, 90, 84], { skip: [12], wrongAt: { 12: 65 } });
+    assert.equal(result.completed, true);
+    const text = renderAttempt({ exercise, result, attemptNumber: 3, previous });
+    assert.equal(text, [
+      '[event: attempt]',
+      'Exercise: "C major scale, right hand" (right hand, 15 steps)',
+      'Try 3 | tempo mode, metronome at 72 bpm',
+      'Result: completed | 14 of 15 steps clean (93%) | wrong notes 1 | missed notes 1 | extra notes 0',
+      'Timing against the click: mean 52 ms late | spread (sd) 37 ms | drift +4.7 ms per beat (falling further behind)',
+      'Loudness (MIDI velocity 1-127): mean 69 | spread (sd) 6 | softest 60 | loudest 77',
+      'Trouble spots (worst first):',
+      '- step 13, E4 (finger 3): missed, not played in time; played F4 instead',
+      '- step 4, F4 (finger 1): 140 ms late',
+      'Change from the previous try: clean 87% -> 93% | wrong notes 0 -> 1 | missed notes 2 -> 1 | mean offset 116 ms late -> 52 ms late | spread 58 -> 37 ms',
+    ].join('\n'));
+    assertWellFormed(text, 'attempt');
   });
 });
 

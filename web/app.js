@@ -693,7 +693,8 @@ function onStatus(status) {
       pill.textContent = 'No piano connected';
   }
   pill.title = status.message ?? '';
-  els.connect.textContent = status.state === 'connected' ? 'Piano' : 'Connect piano';
+  els.connect.textContent = status.state === 'connected' ? 'Connection' : 'Connect piano';
+  els.connect.classList.toggle('btn-primary', status.state !== 'connected');
   $('connect-disconnect').hidden = status.state === 'disconnected';
   if (status.state === 'error' && status.message) showConnectError(status.message);
   if (status.state !== 'connected') keyboard.releaseAll();
@@ -1121,6 +1122,20 @@ function wire() {
     const phrase = freeplay.tick(performance.now());
     if (phrase) onPhrase(phrase);
   }, 200);
+
+  // The notation is laid out for the width it was drawn at: redraw after a real size change.
+  let staffWidth = els.staff.clientWidth;
+  let resizeTimer = 0;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const width = els.staff.clientWidth;
+      if (!exercise || !width || Math.abs(width - staffWidth) < 40) return;
+      staffWidth = width;
+      drawStaff();
+      refreshProgress();
+    }, 200);
+  }).observe(els.staff);
 }
 
 async function main() {

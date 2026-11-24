@@ -115,7 +115,15 @@ Settings has a **MIDI monitor** that lists the raw messages arriving from the pi
 What Claude sees is text like this, never audio:
 
 ```
-REPORT_PLACEHOLDER
+[event: attempt]
+Exercise: "C major scale, right hand" (right hand, 15 steps)
+Try 2 | wait mode, no metronome, suggested tempo 60 bpm
+Result: completed | 14 of 15 steps clean (93%) | wrong notes 1
+Timing (estimated from the gaps between notes): about 71 bpm | evenness 71% (100% = equal gaps) | 1 hesitation | took 12.9 s
+Loudness (MIDI velocity 1-127): mean 70 | spread (sd) 8 | softest 58 | loudest 82
+Trouble spots (worst first):
+- step 4, F4 (finger 1): wrong notes, pressed F#4 before the right key; 1.9 s gap before it (2.2x the usual)
+Change from the previous try: clean 80% -> 93% | wrong notes 3 -> 1 | pace 67 -> 71 bpm | evenness 66% -> 71% | hesitations 2 -> 1
 ```
 
 Claude answers with one JSON object: what to say, one action (keep going, change tempo or mode, drill
@@ -157,7 +165,27 @@ from packet to coach reply is exercised without hardware.
 
 ## Honest limits
 
-LIMITS_PLACEHOLDER
+- **Not yet played on a real piano.** Everything was built and tested against simulated Bluetooth MIDI packets
+  and a fake browser Bluetooth device. The first session on real hardware may surface quirks.
+- **The live Claude connection was built from the API reference but not exercised with a real key in the
+  build environment.** The server falls back step by step if the API rejects an optional feature, and the
+  offline coach always works. Expect to report a bug or two on the first live run.
+- **Browser limits.** Chrome or Edge on a computer or Android. No iPhone, no iPad, no Safari. Linux needs a flag for Bluetooth.
+- **Runs on the computer next to the piano.** Using a phone as the screen needs HTTPS hosting, which is not set up.
+- **The coach reads numbers, not sound.** It cannot hear tone or pedalling and cannot see your hands, posture or
+  which finger you used. It is told to say so instead of pretending.
+- **Timing over Bluetooth is good, not perfect.** The app uses the piano's own timestamps to remove most Bluetooth
+  jitter, but a constant delay of some tens of milliseconds cannot be told apart from playing late. Trust the
+  spread and the drift more than the average. Settings has a timing offset if it always reads late.
+- **Fingerings cover the standard cases only:** major and minor scales, the chromatic scale, major and minor triad
+  arpeggios, five-finger patterns and block chords. Anything else is shown without finger numbers rather than
+  guessed. The tables were checked against several piano-teaching sites through search results, not against a
+  printed scale manual, so a teacher's eye on them is welcome.
+- **Notation is simplified.** No key signatures (accidentals are written on the notes), no beams or ties, one
+  voice per hand. A two-octave scale in the left hand runs into a lot of ledger lines.
+- **Tunes written by the AI can contain wrong notes.** Generated scales, arpeggios and chords cannot, because code builds them.
+- **It costs money per coach reply** when you use a real API key. See the numbers above.
+- **One learner, one browser.** No accounts, no sync between devices.
 
 ## License
 
