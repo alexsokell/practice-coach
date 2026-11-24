@@ -47,12 +47,14 @@ everything else for free.
 Create a key at [platform.claude.com](https://platform.claude.com) and paste it into `.env` as
 `ANTHROPIC_API_KEY`. The API is billed per use, separately from a Claude subscription.
 
-Rough numbers with the default model (`claude-opus-5-5` at $4 per million input tokens and $20 per
-million output tokens): one coach reply is about 2 cents at the start of a session and less once the
-prompt cache is warm. A 30-minute session with 40 replies lands somewhere around 30 to 60 cents.
-Set `COACH_MODEL=claude-haiku-5-5` in `.env` to make it roughly 40 times cheaper with simpler feedback.
-The Settings panel shows a running estimate for the session, and the server refuses more than 20 coach
-requests a minute as a guard against runaway spending.
+Rough estimate with the default model (`claude-opus-5-5`, $4 per million input tokens and $20 per million
+output tokens): about 1 to 2 cents per coach reply, a few cents for the first reply of a session. A 30-minute
+session with 40 replies comes to roughly 50 to 80 cents. These numbers are calculated from token prices, not
+measured on a bill yet. Set `COACH_MODEL=claude-haiku-5-5` in `.env` to make it about 40 times cheaper, with
+simpler feedback.
+
+Two guards against surprises: Settings shows a running cost estimate for the session, and the server refuses
+more than 20 coach requests a minute.
 
 ## Connecting your piano
 
