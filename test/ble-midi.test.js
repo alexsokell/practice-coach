@@ -649,6 +649,7 @@ describe('BleMidiParser: malformed and edge input', () => {
   test('garbage never throws and never produces a malformed message', () => {
     const rnd = lcg(12345);
     const parser = new BleMidiParser({ maxSysexBytes: 64 });
+    const carrying = new BleMidiParser({ maxSysexBytes: 64, carryRunningStatus: true });
     let total = 0;
     for (let round = 0; round < 20000; round += 1) {
       const length = Math.floor(rnd() * 24);
@@ -665,7 +666,9 @@ describe('BleMidiParser: malformed and edge input', () => {
       const out = parser.parse(bytes);
       assert.ok(Array.isArray(out));
       total += out.length;
-      for (const m of out) {
+      const lenient = carrying.parse(bytes);
+      assert.ok(lenient.length >= out.length, 'the opt-in quirk only ever adds messages');
+      for (const m of out.concat(lenient)) {
         assert.ok(Number.isInteger(m.timestamp) && m.timestamp >= 0 && m.timestamp <= 8191);
         assert.ok(m.data instanceof Uint8Array);
         const status = m.data[0];
@@ -683,6 +686,114 @@ describe('BleMidiParser: malformed and edge input', () => {
     }
     assert.ok(total > 1000, 'the fuzz input does produce messages');
     assert.equal(parser.stats.messages, total);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parser: generated streams
+// ---------------------------------------------------------------------------
+
+describe('BleMidiParser: generated compliant streams', () => {
+  test('random streams built by the rules of the specification decode exactly', () => {
+    const rnd = lcg(2024);
+    const pick = (count) => Math.floor(rnd() * count);
+    const dataBytes = (count) => Array.from({ length: count }, () => pick(128));
+    let messages = 0;
+
+    for (let round = 0; round < 400; round += 1) {
+      const expected = [];
+      const packets = [];
+      let t = pick(8192); // device time in ms, unbounded
+      let body = []; // bytes of the current packet after its header
+      let firstStamp = null; // device time of the first timestamp byte of the packet
+      let lastStamp = null; // device time of the most recent timestamp byte
+      let running = 0; // status that may be omitted in this packet
+      let afterSystem = false; // the previous message was a system message
+
+      const flush = () => {
+        packets.push([H(firstStamp ?? t), ...body]);
+        body = [];
+        firstStamp = null;
+        lastStamp = null;
+        running = 0;
+        afterSystem = false;
+      };
+      const stamp = () => {
+        t += pick(100); // below 128, so timestampLow goes backwards exactly when it overflows
+        if (firstStamp === null) firstStamp = t;
+        lastStamp = t;
+        body.push(T(t));
+      };
+
+      const count = 5 + pick(40);
+      for (let m = 0; m < count; m += 1) {
+        if (body.length > 0 && rnd() < 0.2) flush();
+        const kind = rnd();
+        if (kind < 0.65) {
+          // Channel message, as a full message or with running status.
+          const status = running !== 0 && rnd() < 0.5 ? running : 0x80 + pick(0x70);
+          const data = dataBytes(midiDataLength(status));
+          if (status === running && rnd() < 0.7) {
+            // After a system message the timestamp byte is mandatory, otherwise optional.
+            if (afterSystem || rnd() < 0.5) stamp();
+            body.push(...data);
+          } else {
+            stamp();
+            body.push(status, ...data);
+            running = status;
+          }
+          afterSystem = false;
+          expected.push([lastStamp % 8192, [status, ...data]]);
+        } else if (kind < 0.8) {
+          const status = 0xf8 + pick(8);
+          stamp();
+          body.push(status);
+          afterSystem = true;
+          expected.push([t % 8192, [status]]);
+        } else if (kind < 0.9) {
+          const status = [0xf1, 0xf2, 0xf3, 0xf6][pick(4)];
+          const data = dataBytes(midiDataLength(status));
+          stamp();
+          body.push(status, ...data);
+          afterSystem = true;
+          expected.push([t % 8192, [status, ...data]]);
+        } else {
+          // SysEx: maybe split over packets, maybe with realtime messages inside.
+          const data = dataBytes(pick(40));
+          stamp();
+          body.push(0xf0);
+          for (const byte of data) {
+            const r = rnd();
+            if (r < 0.1) {
+              flush(); // the rest goes into a continuation packet: header, then data
+            } else if (r < 0.15) {
+              const realtime = 0xf8 + pick(8);
+              stamp();
+              body.push(realtime);
+              expected.push([t % 8192, [realtime]]);
+            }
+            body.push(byte);
+          }
+          if (rnd() < 0.2) flush(); // the end alone in the last packet
+          stamp();
+          body.push(0xf7);
+          running = 0;
+          afterSystem = true;
+          expected.push([t % 8192, [0xf0, ...data, 0xf7]]);
+        }
+      }
+      flush();
+
+      const parser = new BleMidiParser();
+      const got = packets.flatMap((bytes) => plain(parser.parse(Uint8Array.from(bytes))));
+      assert.deepEqual(got, expected, `round ${round}`);
+      assert.equal(parser.stats.skippedBytes, 0, `round ${round}: nothing skipped`);
+      // The opt-in quirk changes nothing for a compliant stream.
+      const lenient = new BleMidiParser({ carryRunningStatus: true });
+      assert.deepEqual(packets.flatMap((bytes) => plain(lenient.parse(Uint8Array.from(bytes)))), expected);
+      messages += expected.length;
+    }
+    assert.ok(messages > 5000);
   });
 });
 
