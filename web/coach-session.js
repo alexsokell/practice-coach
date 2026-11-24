@@ -154,6 +154,9 @@ export class CoachSession {
     if (event.you) this.#log({ type: 'you', text: event.you });
     else if (event.label) this.#log({ type: 'event', text: event.label });
 
+    // A turn left unanswered (the tab was closed mid-reply, say) must not stay in the transcript:
+    // two user turns in a row would be rejected by the server on every later request.
+    while (session.messages.at(-1)?.role === 'user') session.messages.pop();
     session.messages.push({ role: 'user', content: event.text });
     const bubble = this.#bubble('coach', '');
     bubble.classList.add('is-streaming');

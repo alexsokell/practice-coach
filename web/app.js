@@ -185,6 +185,8 @@ function updateControls() {
 
 function changeTempo({ bpm = exercise.bpm, mode = exercise.mode }) {
   if (!exercise) return;
+  // The learner's own choice wins over a tempo change or drill the coach had queued up.
+  if (pendingSwitch?.basis) dropPendingSwitch();
   const changed = withTempo(exercise, { bpm, mode });
   if (!isUsableExercise(changed)) return;
   exercise = changed;
@@ -426,13 +428,26 @@ function learnerBusy() {
   if (view !== 'exercise') return false;
   const now = performance.now();
   if (now - lastKeyAt < 2000) return true;
-  return (attempt.status === 'playing' || attempt.status === 'countin') && tracker && !tracker.finished && tracker.stepIndex > 0 && now - attempt.lastActivity < 5000;
+  // The count-in and a metronome try run on the clock, keys or no keys: never cut them off.
+  if (attempt.status === 'countin' || (attempt.status === 'playing' && exercise?.mode === 'tempo')) return true;
+  return attempt.status === 'playing' && tracker && !tracker.finished && tracker.stepIndex > 0 && now - attempt.lastActivity < 5000;
 }
 
 /** Load the exercise the coach queued up, once the learner has stopped playing. */
 function applyPendingSwitch() {
-  if (!pendingSwitch || learnerBusy()) return;
+  if (!pendingSwitch || view !== 'exercise' || learnerBusy()) return;
+  const { basis } = pendingSwitch;
+  if (basis && exercise && (basis.id !== exercise.id || basis.bpm !== exercise.bpm || basis.mode !== exercise.mode)) {
+    // The learner changed the exercise, its tempo or its mode by hand while this waited.
+    dropPendingSwitch();
+    return;
+  }
   loadExercise(pendingSwitch.exercise, { parent: pendingSwitch.parent, keepResult: true });
+}
+
+function dropPendingSwitch() {
+  pendingSwitch = null;
+  els.banner.hidden = true;
 }
 
 /**
@@ -752,6 +767,13 @@ function setView(next) {
   showView(next);
   const free = next === 'freeplay';
   stopDemo();
+  if (free && pendingSwitch) {
+    // Free play was the learner's choice: what the coach queued up becomes an offer.
+    suggestion = { exercise: pendingSwitch.exercise, parent: pendingSwitch.parent };
+    $('fp-banner-text').textContent = `Your coach suggests: ${pendingSwitch.exercise.title}.`;
+    $('fp-banner').hidden = false;
+    dropPendingSwitch();
+  }
   if (free) {
     cancelAnimationFrame(rafId);
     stopMetronome();
@@ -947,10 +969,12 @@ function applyCoachAction(action, event) {
   const relative = action.type === 'drill' || action.type === 'set_tempo' || action.type === 'back_to_full';
   if (relative && event?.exercise && exercise) {
     const then = event.exercise;
-    if (then.id !== exercise.id || then.bpm !== exercise.bpm || then.mode !== exercise.mode) return null;
+    if (then.id !== exercise.id || then.bpm !== exercise.bpm || then.mode !== exercise.mode) {
+      return "You changed the exercise or its tempo since that try, so the coach's change was not loaded.";
+    }
   }
   // A hint is about the step the learner is on: it must not swap the exercise under them.
-  if (event?.kind === 'hint') return null;
+  if (event?.kind === 'hint') return 'Hint only: the exercise stays as it is.';
   let backToFull = false;
   if (action.type === 'back_to_full') {
     const full = state.session.parent;
@@ -979,7 +1003,9 @@ function applyCoachAction(action, event) {
     return `Suggested: ${next.title}`;
   }
   if (learnerBusy()) {
-    pendingSwitch = { exercise: next, parent };
+    // basis: what a relative change was computed from, re-checked before it is applied.
+    const basis = relative && exercise ? { id: exercise.id, bpm: exercise.bpm, mode: exercise.mode } : null;
+    pendingSwitch = { exercise: next, parent, basis };
     els.bannerText.textContent = `Your coach has the next step ready: ${next.title}.`;
     els.banner.hidden = false;
   } else {
@@ -1064,6 +1090,8 @@ function beginSession({ fresh = false } = {}) {
   if (!fresh && saved && saved.day === day && Array.isArray(saved.messages)) {
     saved.log ??= [];
     saved.usage ??= { replies: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    // The page may have been closed while a reply was on its way: drop the unanswered turn.
+    while (saved.messages.at(-1)?.role === 'user') saved.messages.pop();
     coach.restore(saved.log);
     if (!loadExercise(saved.exercise, { parent: saved.parent ?? null })) loadExercise(starterExercise());
     return;
