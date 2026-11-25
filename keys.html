@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Piano Keys</title>
+<style>
+  /* One screen: connect bar, what you just played, the keyboard, then the list of key presses. */
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1b2130; --muted: #5f6b7d; --line: #d9dee6;
+    --accent: #1f6feb; --accent-ink: #ffffff; --ok: #15803d; --warn: #b45309;
+    --white-key: #fdfdfb; --black-key: #1e222b; --lit: #36a3ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10131a; --panel: #1a1f2a; --ink: #e8ebf2; --muted: #9aa5b8; --line: #2b3243;
+      --accent: #5b9dff; --accent-ink: #0b1020; --ok: #4ade80; --warn: #fbbf24;
+      --white-key: #e6e4dc; --black-key: #0b0d12; --lit: #36a3ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+  h1 { font-size: 1.15rem; margin: 0; }
+  [hidden] { display: none !important; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .grow { flex: 1; }
+  button { font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.link { border: 0; background: none; padding: 4px; color: var(--accent); font-weight: 500; text-decoration: underline; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { color: var(--muted); }
+  #status.on { color: var(--ok); font-weight: 600; }
+  #status.bad { color: var(--warn); font-weight: 600; }
+  .now { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  #last { font-size: 3rem; font-weight: 800; line-height: 1; min-width: 2.2ch; font-variant-numeric: tabular-nums; }
+  #detail { color: var(--muted); }
+  #pedal { font-size: 0.85rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  #pedal.down { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .kb-wrap { overflow-x: auto; border-radius: 8px; }
+  #kb { position: relative; height: 120px; }
+  .key { position: absolute; top: 0; border-radius: 0 0 4px 4px; }
+  .white { height: 100%; width: var(--kw); left: calc(var(--i) * var(--kw)); background: var(--white-key); border: 1px solid #9c9a90; border-top: 0; }
+  .black { height: 62%; width: calc(var(--kw) * 0.6); left: calc(var(--i) * var(--kw) - var(--kw) * 0.3); background: var(--black-key); z-index: 1; }
+  .key.down { background: var(--lit); }
+  .key span { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center; font-size: 9px; font-weight: 700; color: #6d6b62; pointer-events: none; }
+  #log { list-style: none; margin: 10px 0 0; padding: 0; max-height: 46vh; overflow-y: auto; font-variant-numeric: tabular-nums; }
+  #log li { display: grid; grid-template-columns: 4.5ch 1fr auto; gap: 10px; padding: 6px 2px; border-top: 1px solid var(--line); }
+  #log b { font-weight: 800; }
+  #log .dim { color: var(--muted); }
+  #empty { color: var(--muted); margin: 10px 0 0; }
+  .small { font-size: 0.88rem; color: var(--muted); margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <div class="row">
+      <h1>Piano Keys</h1>
+      <span class="grow"></span>
+      <span id="status">Not connected</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="connect" class="primary" type="button">Connect Bluetooth piano</button>
+      <button id="usb" type="button">USB cable</button>
+      <button id="all" class="link" type="button">My piano is not in the list</button>
+    </div>
+    <p id="help" class="small">Turn on Bluetooth MIDI on the piano, press Connect, and pick the piano from the list. Then play.</p>
+  </div>
+
+  <div class="card">
+    <div class="now">
+      <div id="last">&middot;</div>
+      <div id="detail">Press a key</div>
+      <span class="grow"></span>
+      <span id="pedal" hidden>Pedal</span>
+    </div>
+    <div class="kb-wrap" style="margin-top:12px"><div id="kb"></div></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <strong>Keys you pressed</strong>
+      <span id="count" class="small" style="margin:0"></span>
+      <span class="grow"></span>
+      <button id="copy" type="button">Copy list</button>
+      <button id="clear" type="button">Clear</button>
+    </div>
+    <p id="empty">Nothing yet. Newest key press shows at the top.</p>
+    <ol id="log"></ol>
+  </div>
+</main>
+
+<script>
+'use strict';
+const SERVICE = '03b80e5a-ede8-4b33-a751-6ce34ec4c700';       // Bluetooth MIDI service
+const CHARACTERISTIC = '7772e5db-3868-4112-a1a9-f2669d106bf3'; // its one data channel
+const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const BLACK = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+const LOW = 21, HIGH = 108; // the 88 keys, A0 to C8
+const $ = (id) => document.getElementById(id);
+const noteName = (midi) => NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
+const loudness = (v) => (v < 45 ? 'soft' : v > 90 ? 'loud' : 'medium');
+
+// <parser>
+// Turns one Bluetooth MIDI packet into MIDI messages [status, data1, data2].
+// Packet layout: a header byte, then for each message a timestamp byte, a status byte and its
+// data bytes. The status byte may be left out when it repeats ("running status").
+function parseBleMidi(data, state) {
+  const out = [];
+  if (data.length < 2 || !(data[0] & 0x80)) return out;
+  let i = 1;
+  let status = 0;
+  while (i < data.length) {
+    if (data[i] & 0x80) {
+      i += 1; // a timestamp byte: not needed here
+      if (i >= data.length) break;
+      const b = data[i];
+      if (b & 0x80) {
+        i += 1;
+        if (b >= 0xf8) continue; // clock and similar: no data
+        if (b === 0xf0) { state.sysex = true; status = 0; continue; }
+        if (b === 0xf7) { state.sysex = false; continue; }
+        state.sysex = false;
+        if (b >= 0xf0) { i += b === 0xf2 ? 2 : b === 0xf1 || b === 0xf3 ? 1 : 0; continue; }
+        status = b;
+      }
+    }
+    if (i >= data.length) break;
+    if (data[i] & 0x80) continue; // next message starts here
+    if (state.sysex || !status) { i += 1; continue; } // skip bytes that are not a key message
+    const need = (status & 0xf0) === 0xc0 || (status & 0xf0) === 0xd0 ? 1 : 2;
+    if (i + need > data.length) break;
+    if (need === 2 && (data[i + 1] & 0x80)) { i += 1; continue; }
+    out.push([status, data[i], need === 2 ? data[i + 1] : 0]);
+    i += need;
+  }
+  return out;
+}
+// </parser>
+
+// ---------------------------------------------------------------- what is shown
+const held = new Map(); // midi -> { time, row }
+const keys = new Map();
+let presses = 0;
+
+function buildKeyboard() {
+  const kb = $('kb');
+  let white = 0;
+  for (let midi = LOW; midi <= HIGH; midi += 1) {
+    const el = document.createElement('div');
+    const black = BLACK[midi % 12];
+    el.className = black ? 'key black' : 'key white';
+    el.style.setProperty('--i', white);
+    if (!black) {
+      if (midi % 12 === 0) el.innerHTML = '<span>' + noteName(midi) + '</span>';
+      white += 1;
+    }
+    el.dataset.midi = midi;
+    keys.set(midi, el);
+    kb.append(el);
+  }
+  const size = () => {
+    const kw = Math.max(13, kb.parentElement.clientWidth / white);
+    kb.style.setProperty('--kw', kw + 'px');
+    kb.style.width = kw * white + 'px';
+  };
+  size();
+  addEventListener('resize', size);
+  // Tap the picture of a key to try the page without a piano.
+  kb.addEventListener('pointerdown', (e) => {
+    const midi = Number(e.target.closest('.key')?.dataset.midi);
+    if (!midi) return;
+    noteOn(midi, 70);
+    const up = () => { noteOff(midi); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+  });
+  keys.get(60).scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+
+function noteOn(midi, velocity) {
+  const now = performance.now();
+  const already = held.get(midi);
+  if (already) {
+    if (now - already.time < 30) return; // the same press sent twice (layered piano voices)
+    noteOff(midi);
+  }
+  const row = document.createElement('li');
+  row.innerHTML = '<b></b><span></span><span class="dim">held...</span>';
+  row.children[0].textContent = noteName(midi);
+  row.children[1].textContent = loudness(velocity) + ' (' + velocity + ' of 127)';
+  $('log').prepend(row);
+  while ($('log').children.length > 300) $('log').lastChild.remove();
+  held.set(midi, { time: now, row });
+  presses += 1;
+  $('empty').hidden = true;
+  $('count').textContent = presses + (presses === 1 ? ' key press' : ' key presses');
+  const el = keys.get(midi);
+  if (el) {
+    el.classList.add('down');
+    const box = el.closest('.kb-wrap');
+    if (el.offsetLeft < box.scrollLeft || el.offsetLeft > box.scrollLeft + box.clientWidth - 30) {
+      box.scrollTo({ left: el.offsetLeft - box.clientWidth / 2, behavior: 'smooth' });
+    }
+  }
+  $('last').textContent = noteName(midi);
+  showHeld(loudness(velocity));
+}
+
+function noteOff(midi) {
+  const entry = held.get(midi);
+  if (!entry) return;
+  held.delete(midi);
+  entry.row.children[2].textContent = 'held ' + ((performance.now() - entry.time) / 1000).toFixed(2) + ' s';
+  keys.get(midi)?.classList.remove('down');
+  showHeld();
+}
+
+function showHeld(extra) {
+  const names = [...held.keys()].sort((a, b) => a - b).map(noteName);
+  if (names.length > 1) $('detail').textContent = 'Holding ' + names.join(' ');
+  else if (extra) $('detail').textContent = extra;
+}
+
+function releaseAll() {
+  for (const midi of [...held.keys()]) noteOff(midi);
+}
+
+function handleMidi(status, d1, d2) {
+  const kind = status & 0xf0;
+  if (kind === 0x90 && d2 > 0) noteOn(d1, d2);
+  else if (kind === 0x80 || kind === 0x90) noteOff(d1);
+  else if (kind === 0xb0 && d1 === 64) {
+    $('pedal').hidden = false;
+    $('pedal').classList.toggle('down', d2 >= 64);
+  }
+}
+
+function setStatus(text, cls) {
+  $('status').textContent = text;
+  $('status').className = cls || '';
+}
+
+// ---------------------------------------------------------------- Bluetooth
+let device = null;
+let wanted = false; // false after the piano was dropped on purpose or retries ran out
+const parserState = { sysex: false };
+
+async function connectBluetooth(showAll) {
+  if (!navigator.bluetooth) {
+    setStatus('This browser cannot use Bluetooth', 'bad');
+    $('help').textContent = /iPhone|iPad/.test(navigator.userAgent)
+      ? 'iPhone and iPad browsers cannot connect to a Bluetooth piano. Use Chrome or Edge on a computer or an Android phone.'
+      : 'Use Chrome or Edge on a computer or an Android phone. On Linux, Chrome needs the flag chrome://flags/#enable-experimental-web-platform-features.';
+    return;
+  }
+  try {
+    const options = showAll
+      ? { acceptAllDevices: true, optionalServices: [SERVICE] }
+      : { filters: [{ services: [SERVICE] }], optionalServices: [SERVICE] };
+    const picked = await navigator.bluetooth.requestDevice(options);
+    if (device && device !== picked) { wanted = false; device.gatt.disconnect(); }
+    device = picked;
+    wanted = true;
+    device.addEventListener('gattserverdisconnected', onDropped);
+    await openDevice();
+  } catch (err) {
+    if (err && err.name === 'NotFoundError') return; // the list was closed without picking
+    setStatus('Could not connect', 'bad');
+    $('help').textContent = explain(err);
+  }
+}
+
+async function openDevice() {
+  setStatus('Connecting...');
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE);
+  const characteristic = await service.getCharacteristic(CHARACTERISTIC);
+  try { await characteristic.readValue(); } catch (e) { /* some pianos refuse the read: fine */ }
+  characteristic.addEventListener('characteristicvaluechanged', (event) => {
+    const view = event.target.value;
+    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    for (const message of parseBleMidi(bytes, parserState)) handleMidi(message[0], message[1], message[2]);
+  });
+  await characteristic.startNotifications();
+  parserState.sysex = false;
+  setStatus('Connected: ' + (device.name || 'Bluetooth piano'), 'on');
+  $('help').textContent = 'Play. Every key you press shows up below.';
+}
+
+async function onDropped() {
+  releaseAll();
+  if (!wanted) return;
+  for (const wait of [1000, 2000, 4000, 8000, 8000]) {
+    setStatus('Connection lost. Reconnecting...', 'bad');
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    if (!wanted) return;
+    try { await openDevice(); return; } catch (e) { /* try again */ }
+  }
+  wanted = false;
+  setStatus('Connection lost', 'bad');
+  $('help').textContent = 'Check that the piano is on and close by, then press Connect again.';
+}
+
+function explain(err) {
+  const text = String((err && err.message) || err);
+  if (/No Services matching|getPrimaryService|not found in device/i.test(text)) {
+    return 'That device does not offer Bluetooth MIDI. Pick the entry for the piano itself, and check that Bluetooth MIDI (not only Bluetooth audio) is on.';
+  }
+  if (/adapter|not available/i.test(text)) return 'Bluetooth is off or missing on this device. Turn it on and try again.';
+  return 'The piano did not connect. Make sure no phone app is connected to it, switch its Bluetooth off and on, and try again.';
+}
+
+// ---------------------------------------------------------------- USB (or a piano already paired in the system)
+async function connectUsb() {
+  if (!navigator.requestMIDIAccess) {
+    setStatus('This browser cannot use MIDI', 'bad');
+    $('help').textContent = 'Use Chrome, Edge or Firefox on a computer.';
+    return;
+  }
+  try {
+    const access = await navigator.requestMIDIAccess();
+    const attach = () => {
+      const names = [];
+      for (const port of access.inputs.values()) {
+        port.onmidimessage = (event) => handleMidi(event.data[0], event.data[1] || 0, event.data[2] || 0);
+        names.push(port.name);
+      }
+      if (names.length) setStatus('Connected: ' + names.join(', '), 'on');
+      else setStatus('No MIDI device found. Plug the piano in.', 'bad');
+    };
+    access.onstatechange = attach;
+    attach();
+  } catch (err) {
+    setStatus('MIDI was blocked', 'bad');
+    $('help').textContent = 'Allow MIDI devices for this page in the browser settings, then try again.';
+  }
+}
+
+// ---------------------------------------------------------------- buttons
+$('connect').addEventListener('click', () => connectBluetooth(false));
+$('all').addEventListener('click', () => connectBluetooth(true));
+$('usb').addEventListener('click', connectUsb);
+$('clear').addEventListener('click', () => {
+  $('log').replaceChildren();
+  presses = 0;
+  $('count').textContent = '';
+  $('empty').hidden = false;
+});
+$('copy').addEventListener('click', async () => {
+  // Oldest first, one key press per line, ready to paste into a chat.
+  const lines = [...$('log').children].reverse().map((row) => [...row.children].map((cell) => cell.textContent).join('  '));
+  const text = lines.join('\n') || 'No key presses yet.';
+  try {
+    await navigator.clipboard.writeText(text);
+    $('copy').textContent = 'Copied';
+  } catch (e) {
+    $('copy').textContent = 'Copy failed';
+  }
+  setTimeout(() => { $('copy').textContent = 'Copy list'; }, 1500);
+});
+buildKeyboard();
+</script>
+</body>
+</html>

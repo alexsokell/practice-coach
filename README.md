@@ -8,6 +8,13 @@ report of each try, tells you the one thing to fix, and picks what you practice 
 
 Early prototype, built in public.
 
+## Just want to see your keystrokes?
+
+Open **`keys.html`** in Chrome or Edge. It is one file with no setup, no server and no AI: press
+**Connect Bluetooth piano**, pick your piano, and every key you press lights up and is listed with
+how hard and how long you played it. Everything below this section is the larger coaching app, which
+you can ignore.
+
 ## What it does
 
 - **Connects to your piano** over Bluetooth MIDI (BLE MIDI) straight from the browser. USB MIDI works too.
